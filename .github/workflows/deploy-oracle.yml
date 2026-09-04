@@ -1,0 +1,80 @@
+name: Deploy to Oracle
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: oracle-production
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: Configure SSH
+        env:
+          SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.ORACLE_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/oracle
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/oracle ~/.ssh/known_hosts
+
+      - name: Upload source
+        env:
+          HOST: ${{ secrets.ORACLE_HOST }}
+          USER: ${{ secrets.ORACLE_USER }}
+        run: |
+          rsync -az --delete \
+            --exclude='.git/' \
+            --exclude='node_modules/' \
+            --exclude='data/db.json' \
+            --exclude='.env*' \
+            --exclude='output/' \
+            --exclude='tmp/' \
+            -e 'ssh -i ~/.ssh/oracle' \
+            ./ "$USER@$HOST:/home/opc/thingalong/"
+
+      - name: Build and restart
+        env:
+          HOST: ${{ secrets.ORACLE_HOST }}
+          USER: ${{ secrets.ORACLE_USER }}
+        run: |
+          ssh -i ~/.ssh/oracle "$USER@$HOST" <<'REMOTE'
+          set -euo pipefail
+          cd /home/opc/thingalong
+          npm ci --omit=dev
+          sudo systemctl stop thingalong || true
+          sudo install -m 0644 deploy/thingalong.service /etc/systemd/system/thingalong.service
+          sudo install -m 0644 deploy/thingalong.conf /etc/nginx/conf.d/thingalong.conf
+          sudo firewall-cmd --permanent --add-service=http
+          sudo firewall-cmd --permanent --add-service=https
+          sudo firewall-cmd --reload
+          sudo systemctl daemon-reload
+          sudo systemctl enable --now thingalong
+          sudo nginx -t
+          sudo systemctl reload nginx
+          for attempt in {1..30}; do
+            curl --fail --silent http://127.0.0.1:3000/ >/dev/null && exit 0
+            sleep 2
+          done
+          sudo journalctl -u thingalong -n 80 --no-pager
+          exit 1
+          REMOTE

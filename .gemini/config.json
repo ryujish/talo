@@ -1,0 +1,7 @@
+{
+  "model": "gemini-2.5-flash",
+  "thinkingBudget": 10000,
+  "subagentModel": "gemini-2.5-flash-8b",
+  "autocompactPct": 50,
+  "systemInstructionFile": ".gemini/GEMINI.md"
+}

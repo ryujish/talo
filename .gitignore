@@ -1,0 +1,57 @@
+# Dependencies
+node_modules/
+
+# Next.js build output
+.next/
+.next-*/
+out/
+
+# Build and test artifacts
+dist/
+build/
+coverage/
+*.tsbuildinfo
+/output/
+/tmp/
+
+# Runtime data and local environment
+data/db.json
+.env
+.env.*
+!.env.example
+
+# Local archives and logs
+*.zip
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local tooling and editor metadata
+.agents/
+.codex-plugins/
+.idea/
+AGENTS.md
+CLAUDE.md
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Local UI prototype dependencies/build output
+ui-prototype/node_modules/
+ui-prototype/dist/
+
+# Accidental npm output file
+/11.18.0
+
+# Scratch directory
+scratch/
+
+# Python CLI (talo)
+cli/.venv/
+cli/*.egg-info/
+__pycache__/
+*.pyc
+.pytest_cache/
