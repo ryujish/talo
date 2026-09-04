@@ -1,7 +1,9 @@
 """CLI 인자·doctor·스킬·컨텍스트 테스트."""
 from __future__ import annotations
 
+import asyncio
 import json
+from types import SimpleNamespace
 
 from talo.cli.main import build_parser
 from talo.context.engine import ContextBlock, ContextEngine, estimate_tokens
@@ -18,6 +20,61 @@ def test_parser_commands():
     assert args.command == "connect" and args.action == "use" and args.target == "openrouter_1:model"
     args = parser.parse_args(["doctor"])
     assert args.command == "doctor"
+
+
+def test_slash_help_uses_named_menu(capsys):
+    from talo.cli.interactive import (
+        COMMANDS_HELP,
+        SLASH_MENU_HEIGHT,
+        SLASH_MENU_STYLE,
+        _handle_slash_interactive,
+    )
+
+    _handle_slash_interactive(None, "ses_test", "/help")
+    output = capsys.readouterr().out
+    assert "Talo 명령 메뉴" in output
+    assert "선택" in output and "메뉴" in output and "설명" in output
+    assert "/model" in output and "모델 선택" in output
+    assert SLASH_MENU_HEIGHT > len(COMMANDS_HELP)
+    assert "#ffaf87" in SLASH_MENU_STYLE["completion-menu.completion.current"]
+
+
+def test_approval_menu_does_not_claim_session_grant(capsys):
+    from talo.cli.interactive import _approval_prompt
+
+    class Prompt:
+        async def prompt_async(self, _message):
+            return "2"
+
+    assert asyncio.run(_approval_prompt(Prompt(), "file_write", {"path": "a.txt"})) is False
+    output = capsys.readouterr().out
+    assert "이번만 허용" in output and "거절" in output
+    assert "세션 허용" not in output
+
+
+def test_interactive_exits_after_two_idle_ctrl_c(monkeypatch, capsys):
+    import prompt_toolkit
+    from talo.cli.interactive import run_interactive
+
+    class Prompt:
+        async def prompt_async(self, *_args, **_kwargs):
+            raise KeyboardInterrupt
+
+    config = SimpleNamespace(default_mode="dev", default_permission="project_edit")
+    ctx = SimpleNamespace(
+        config=config,
+        resolver=SimpleNamespace(active=lambda: None),
+        repo_info=SimpleNamespace(summary=lambda: {}),
+    )
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr(prompt_toolkit, "PromptSession", lambda *_args, **_kwargs: Prompt())
+
+    result = asyncio.run(run_interactive(ctx, "ses_test"))
+
+    assert result == 0
+    output = capsys.readouterr().out
+    assert "한 번 더" in output
+    assert "Talo를 종료합니다" in output
 
 
 def test_context_engine_handoff():

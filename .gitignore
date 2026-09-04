@@ -23,6 +23,7 @@ data/db.json
 # Local archives and logs
 *.zip
 *.log
+nohup.out
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

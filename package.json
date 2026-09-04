@@ -1,7 +1,8 @@
 {
-  "name": "think-along",
+  "name": "talo-workspace",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "next dev",
     "dev:api": "NEXT_DIST_DIR=.next-api next dev -p 3001",

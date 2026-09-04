@@ -13,20 +13,31 @@ from typing import Any
 from talo.schemas import ExitCode
 
 COMMANDS_HELP = {
-    "/help": "도움말",
-    "/model": "현재 실행에 사용할 모델 선택",
-    "/connect": "AI 연결·인증 관리",
-    "/plan": "계획 모드 전환",
-    "/dev": "개발 모드 전환",
-    "/status": "목표·실행·검증·사용량 상태",
-    "/diff": "이번 작업 변경과 기존 변경 구분",
-    "/memory": "기억 확인·수정·삭제·고정",
-    "/sessions": "세션 선택·새 작업 시작",
-    "/permissions": "권한 확인·변경",
-    "/skills": "스킬 목록·명시적 실행",
-    "/mcp": "등록된 도구 연결과 상태",
-    "/export": "세션과 인계 자료를 Markdown 또는 JSON으로 내보내기",
-    "/quit": "종료",
+    "/help": ("도움말", "사용 가능한 명령과 사용법을 봅니다"),
+    "/model": ("모델 선택", "현재 실행에 사용할 AI 모델을 바꿉니다"),
+    "/connect": ("AI 연결", "AI 서비스 연결과 인증을 관리합니다"),
+    "/plan": ("계획 모드", "파일을 바꾸지 않고 분석과 계획만 수행합니다"),
+    "/dev": ("개발 모드", "허용된 범위에서 코드를 수정하고 검증합니다"),
+    "/status": ("작업 상태", "최근 실행과 검증 결과를 확인합니다"),
+    "/diff": ("변경 내용", "현재 Git 변경 요약을 확인합니다"),
+    "/memory": ("기억 관리", "프로젝트 기억을 조회·추가·확정·삭제합니다"),
+    "/sessions": ("세션 목록", "저장된 작업 세션을 확인합니다"),
+    "/permissions": ("권한 설정", "현재 작업 방식과 권한을 확인합니다"),
+    "/skills": ("스킬 목록", "사용 가능한 스킬과 설명을 확인합니다"),
+    "/mcp": ("MCP 연결", "등록된 MCP 도구 연결 상태를 확인합니다"),
+    "/export": ("내보내기", "세션 인계 자료를 Markdown 또는 JSON으로 저장합니다"),
+    "/quit": ("종료", "Talo 대화형 세션을 종료합니다"),
+}
+
+SLASH_MENU_HEIGHT = len(COMMANDS_HELP) + 1
+SLASH_MENU_STYLE = {
+    "prompt": "bold #ffaf87",
+    "completion-menu.completion": "bg:#1f1f1f #bcbcbc",
+    "completion-menu.completion.current": "bg:#ffaf87 #1c1c1c bold",
+    "completion-menu.meta.completion": "bg:#1f1f1f #777777",
+    "completion-menu.meta.completion.current": "bg:#ffaf87 #1c1c1c",
+    "scrollbar.background": "bg:#303030",
+    "scrollbar.button": "bg:#ffaf87",
 }
 
 
@@ -73,9 +84,14 @@ async def run_interactive(ctx: Any, session_id: str) -> int:
         def get_completions(self, document: Any, complete_event: Any):
             text = document.text_before_cursor
             if text.startswith("/"):
-                for cmd in COMMANDS_HELP:
+                for cmd, (name, description) in COMMANDS_HELP.items():
                     if cmd.startswith(text):
-                        yield Completion(cmd, start_position=-len(text), display=cmd)
+                        yield Completion(
+                            cmd,
+                            start_position=-len(text),
+                            display=f"{cmd:<13} {name}",
+                            display_meta=description,
+                        )
             elif text.startswith("@"):
                 from prompt_toolkit.completion import PathCompleter
                 pc = PathCompleter(only_directories=False, expanduser=True)
@@ -86,19 +102,26 @@ async def run_interactive(ctx: Any, session_id: str) -> int:
         "› ",
         completer=SlashCompleter(),
         key_bindings=bindings,
-        style=Style.from_dict({"prompt": "bold blue"}),
+        style=Style.from_dict(SLASH_MENU_STYLE),
+        reserve_space_for_menu=SLASH_MENU_HEIGHT,
         multiline=False,
     )
 
+    ctrl_c_armed = False
     while True:
         try:
             text = await session_prompt.prompt_async()
         except KeyboardInterrupt:
-            render.console.print("\n[dim]Ctrl+C: 유휴 상태입니다. /quit로 종료하세요.[/dim]")
+            if ctrl_c_armed:
+                render.console.print("\n[dim]Talo를 종료합니다.[/dim]")
+                return int(ExitCode.COMPLETED)
+            ctrl_c_armed = True
+            render.console.print("\n[dim]종료하려면 Ctrl+C를 한 번 더 누르세요.[/dim]")
             continue
         except EOFError:
             render.console.print("\n[dim]종료합니다.[/dim]")
             return int(ExitCode.COMPLETED)
+        ctrl_c_armed = False
         text = text.strip()
         if not text:
             continue
@@ -146,13 +169,16 @@ async def _approval_prompt(session_prompt: Any, tool: str, scope: dict[str, Any]
 
     render.console.print(f"[yellow]승인 요청: {tool}[/yellow]")
     render.console.print(f"  실행 내용: {json.dumps(scope, ensure_ascii=False)[:200]}")
-    render.console.print("  [1] 이번만 허용  [2] 세션 허용  [3] 거절")
+    render.menu_table("승인 선택", [
+        ("1", "이번만 허용", "이 도구 호출 한 번만 실행합니다"),
+        ("2", "거절", "도구를 실행하지 않고 대화를 계속합니다"),
+    ])
     try:
-        answer = await session_prompt.prompt_async("승인 선택 (1/2/3): ")
+        answer = await session_prompt.prompt_async("선택 (1/2): ")
     except (EOFError, KeyboardInterrupt):
         return False
     answer = answer.strip()
-    return answer in {"1", "2", "y", "yes", "허용"}
+    return answer in {"1", "y", "yes", "허용"}
 
 
 def _print_outcome(outcome: Any) -> None:
@@ -185,9 +211,11 @@ def _handle_slash_interactive(ctx: Any, session_id: str, text: str) -> Any:
     arg = parts[1] if len(parts) > 1 else ""
 
     if cmd == "/help":
-        lines = ["Talo 명령", ""]
-        lines += [f"{k}  {v}" for k, v in COMMANDS_HELP.items()]
-        render.console.print("\n".join(lines))
+        render.menu_table(
+            "Talo 명령 메뉴",
+            [(command, name, description) for command, (name, description) in COMMANDS_HELP.items()],
+        )
+        render.console.print("[dim]명령을 입력하거나 자연어로 바로 요청하세요.[/dim]")
         return None
     if cmd == "/quit" or cmd == "/exit":
         return "quit"

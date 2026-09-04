@@ -52,6 +52,8 @@ class CliSubprocessAdapter(ModelAdapter):
         auth_file = Path.home() / ".codex" / "auth.json"
         if self.command == "codex" and not auth_file.exists():
             return False, "Codex 로그인 세션이 없음 — `codex login` 실행 후 다시 시도하세요"
+        if self.command == "opencode" and not (Path.home() / ".local/share/opencode/auth.json").exists():
+            return False, "OpenCode 로그인 세션이 없음 — `opencode auth login` 실행 후 다시 시도하세요"
         return True, f"{self.command} CLI 사용 가능 (OAuth 세션)"
 
     async def complete(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None,
@@ -61,15 +63,22 @@ class CliSubprocessAdapter(ModelAdapter):
         prompt = self._build_prompt(messages)
         model_id = model or self.connection.model_id or ""
 
-        cmd = [self.command, "exec", "--color", "never", "--skip-git-repo-check", "--ephemeral"]
-        if self.command == "codex":
+        if self.command == "opencode":
+            cmd = [self.command, "run"]
+        elif self.command == "agy":
+            cmd = [self.command, "--dangerously-skip-permissions"]
+        else:
+            cmd = [self.command, "exec", "--color", "never", "--skip-git-repo-check", "--ephemeral"]
             cmd.append("--json")
         if model_id:
-            cmd += ["-m", model_id]
+            cmd += ["--model" if self.command == "agy" else "-m", model_id]
         cwd = self.cwd or None
-        if cwd:
-            cmd += ["-C", cwd]
-        cmd.append(prompt)
+        if cwd and self.command != "agy":
+            cmd += ["--dir" if self.command == "opencode" else "-C", cwd]
+        if self.command == "agy":
+            cmd += ["--print", prompt]
+        else:
+            cmd.append(prompt)
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -81,6 +90,7 @@ class CliSubprocessAdapter(ModelAdapter):
         self._proc = proc
 
         chunks: list[str] = []
+        stderr_task = asyncio.create_task(self._read_stream(proc.stderr))
         try:
             assert proc.stdout is not None
             async for raw in proc.stdout:
@@ -111,16 +121,18 @@ class CliSubprocessAdapter(ModelAdapter):
                         if on_delta is not None:
                             await on_delta(clean + "\n")
             await proc.wait()
+            stderr_text = await stderr_task
+        except BaseException:
+            stderr_task.cancel()
+            await asyncio.gather(stderr_task, return_exceptions=True)
+            raise
         finally:
             self._proc = None
 
         text = "\n".join(chunks).strip()
-        if proc.returncode not in (0, None) and not text:
-            err_msg = ""
-            if proc.stderr is not None:
-                err_bytes = await proc.stderr.read()
-                err_msg = err_bytes.decode("utf-8", "replace")[-500:]
-            raise RuntimeError(err_msg or f"{self.command} exec 실패 (exit {proc.returncode})")
+        if proc.returncode not in (0, None):
+            raise RuntimeError(stderr_text[-500:] or text[-500:]
+                               or f"{self.command} exec 실패 (exit {proc.returncode})")
 
         if not text:
             text = "CLI 실행이 완료됐지만 출력이 없습니다."
@@ -150,6 +162,15 @@ class CliSubprocessAdapter(ModelAdapter):
             self._proc = None
 
     # -- 내부 ---------------------------------------------------------------
+    @staticmethod
+    async def _read_stream(stream: Any) -> str:
+        if stream is None:
+            return ""
+        chunks: list[str] = []
+        async for raw in stream:
+            chunks.append(_strip_ansi(raw.decode("utf-8", "replace")))
+        return "".join(chunks).strip()
+
     @staticmethod
     def _build_prompt(messages: list[dict[str, Any]]) -> str:
         """OpenAI 형식 메시지를 단일 프롬프트로 접는다."""

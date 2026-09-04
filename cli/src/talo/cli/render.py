@@ -5,6 +5,7 @@ import json
 from typing import Any
 
 from rich.console import Console
+from rich import box
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
@@ -15,14 +16,30 @@ console = Console()
 
 def header(info: dict[str, Any], model: str | None, mode: str, permission: str) -> None:
     lines = [
-        f"[bold]Talo[/bold]",
-        f"프로젝트  {info.get('root', '-')} · 브랜치 {info.get('branch') or '없음'}",
-        f"작업 방식  {mode} · 권한: {permission}",
-        f"AI        {model or '연결 안 됨 — talo connect로 설정'}",
+        f"[dim]프로젝트[/dim]  {info.get('root', '-')}  [dim]·[/dim]  {info.get('branch') or 'Git 없음'}",
+        f"[dim]작업 방식[/dim]  [bold cyan]{mode}[/bold cyan]  [dim]· 권한[/dim]  {permission}",
+        f"[dim]AI 모델[/dim]   {model or '연결 안 됨 — /connect로 설정'}",
     ]
     if info.get("limitation"):
         lines.append(f"[yellow]주의[/yellow] {info['limitation']}")
-    console.print(Panel("\n".join(lines), border_style="blue"))
+    console.print(Panel(
+        "\n".join(lines),
+        title="[bold cyan]Talo[/bold cyan]",
+        subtitle="[dim]/help 명령 메뉴[/dim]",
+        border_style="cyan",
+        padding=(0, 1),
+    ))
+
+
+def menu_table(title: str, rows: list[tuple[str, str, str]]) -> None:
+    """번호/명령, 메뉴명, 설명을 같은 모양으로 보여준다."""
+    table = Table(title=title, box=box.ROUNDED, header_style="bold cyan", pad_edge=False)
+    table.add_column("선택", style="bold cyan", no_wrap=True)
+    table.add_column("메뉴", style="bold", no_wrap=True)
+    table.add_column("설명", style="dim")
+    for key, name, description in rows:
+        table.add_row(key, name, description)
+    console.print(table)
 
 
 def print_delta(text: str, end: str = "") -> None:

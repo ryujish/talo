@@ -1,6 +1,7 @@
 """Talo CLI 대화형 연결 마법사 및 자동 감지 단위 테스트."""
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -14,6 +15,7 @@ from talo.cli.connection_wizard import (
 from talo.cli.main import build_parser
 from talo.config import Config, ConnectionConfig
 from talo.providers.resolver import CredentialStore
+from talo.providers.cli_subprocess import CliSubprocessAdapter
 
 
 def test_parser_new_commands():
@@ -37,6 +39,9 @@ def test_presets_validity():
     assert "openai" in SERVICE_PRESETS
     assert "gemini" in SERVICE_PRESETS
     assert "think_along" in SERVICE_PRESETS
+    assert len(SERVICE_PRESETS["opencode"]["default_models"]) >= 20
+    assert "opencode/big-pickle" in SERVICE_PRESETS["opencode"]["free_models"]
+    assert len(SERVICE_PRESETS["agy"]["default_models"]) == 14
 
     deepseek = SERVICE_PRESETS["deepseek"]
     assert deepseek["base_url"] == "https://api.deepseek.com"
@@ -44,7 +49,8 @@ def test_presets_validity():
 
     think_along = SERVICE_PRESETS["think_along"]
     assert "mcp.flowpulse.ai.kr" in think_along["base_url"]
-    assert think_along["default_key"] == "335d3b38936e1d6d137b71fb32d9e2f667bc6f194540a64cc6f161fff0f3116a"
+    assert think_along["env_names"] == ["THINK_ALONG_OAUTH_KEY"]
+    assert "default_key" not in think_along
 
 
 def test_scan_local_environment_deepcode_env(monkeypatch):
@@ -144,8 +150,180 @@ def test_model_picker_switching(tmp_path):
     cfg.set_connection(conn2)
     cfg.set_default_model("deepseek_1:deepseek-v4-pro")
 
-    # 2번 선택 -> openai_1 로 변경
-    with patch("builtins.input", return_value="2"):
+    with patch("builtins.input", side_effect=["1", "1"]):
         picked = run_model_picker(cfg)
         assert picked == "openai_1:gpt-4.1-mini"
         assert cfg.default_model == "openai_1:gpt-4.1-mini"
+
+
+def test_model_picker_main_categories_are_fixed(tmp_path):
+    cfg = Config(path=tmp_path / "config.toml")
+    cfg.set_connection(ConnectionConfig("deepseek_1", "deepseek", model_id="deepseek-chat"))
+
+    with (
+        patch("talo.cli.connection_wizard.shutil.which", return_value=None),
+        patch("talo.cli.connection_wizard.render.menu_table") as menu_table,
+        patch("builtins.input", return_value="0"),
+    ):
+        run_model_picker(cfg)
+
+    rows = menu_table.call_args.args[1]
+    assert [row[1] for row in rows[:6]] == [
+        "OpenAI", "Claude", "DeepSeek", "Kimi", "OpenCode", "Google",
+    ]
+    assert rows[6][1] == "ETC"
+
+
+def test_model_picker_selects_provider_submodel(tmp_path):
+    cfg = Config(path=tmp_path / "config.toml")
+    conn = ConnectionConfig("deepseek_1", "deepseek", model_id="deepseek-chat")
+    cfg.set_connection(conn)
+    cfg.set_default_model("deepseek_1:deepseek-chat")
+
+    with patch("builtins.input", side_effect=["3", "2"]):
+        picked = run_model_picker(cfg)
+
+    assert picked == "deepseek_1:deepseek-reasoner"
+    assert cfg.default_model == "deepseek_1:deepseek-reasoner"
+
+
+def test_model_picker_accepts_direct_submodel_id(tmp_path):
+    cfg = Config(path=tmp_path / "config.toml")
+    conn = ConnectionConfig("openai_1", "openai", model_id="gpt-4.1-mini")
+    cfg.set_connection(conn)
+
+    with (
+        patch("talo.cli.connection_wizard.shutil.which", return_value=None),
+        patch("builtins.input", side_effect=["8", "1", "gpt-custom"]),
+    ):
+        picked = run_model_picker(cfg)
+
+    assert picked == "openai_1:gpt-custom"
+
+
+def test_model_picker_shows_opencode_zen_catalog(tmp_path):
+    cfg = Config(path=tmp_path / "config.toml")
+    conn = ConnectionConfig(
+        "opencode_1", "opencode", protocol="cli_subprocess",
+        model_id="opencode/big-pickle", command="opencode",
+    )
+    cfg.set_connection(conn)
+
+    with patch("builtins.input", side_effect=["7", "2"]):
+        picked = run_model_picker(cfg)
+
+    assert picked == "opencode_1:opencode/ling-3.0-flash-fin-free"
+
+
+def test_model_picker_auto_connects_local_opencode(tmp_path):
+    cfg = Config(path=tmp_path / "config.toml")
+    auth = tmp_path / ".local/share/opencode/auth.json"
+    auth.parent.mkdir(parents=True)
+    auth.write_text("{}", encoding="utf-8")
+
+    with (
+        patch("talo.cli.connection_wizard.Path.home", return_value=tmp_path),
+        patch("talo.cli.connection_wizard.shutil.which", return_value="/bin/opencode"),
+        patch("builtins.input", side_effect=["4", "1"]),
+    ):
+        picked = run_model_picker(cfg)
+
+    assert picked == "opencode_cli:opencode/kimi-k3"
+    assert cfg.connection("opencode_cli").command == "opencode"
+
+
+def test_model_picker_auto_connects_agy_under_google(tmp_path):
+    cfg = Config(path=tmp_path / "config.toml")
+    (tmp_path / ".gemini/antigravity-cli").mkdir(parents=True)
+
+    with (
+        patch("talo.cli.connection_wizard.Path.home", return_value=tmp_path),
+        patch(
+            "talo.cli.connection_wizard.shutil.which",
+            side_effect=lambda command: "/bin/agy" if command == "agy" else None,
+        ),
+        patch("builtins.input", side_effect=["6", "1"]),
+    ):
+        picked = run_model_picker(cfg)
+
+    assert picked == "agy_cli:gemini-3.8-flash-high"
+    assert cfg.connection("agy_cli").command == "agy"
+
+
+def test_agy_bridge_uses_dangerous_permissions_flag(tmp_path):
+    conn = ConnectionConfig(
+        "agy_cli", "agy", protocol="cli_subprocess",
+        model_id="gemini-3.8-flash-high", command="agy", cwd=str(tmp_path),
+    )
+    called: list[str] = []
+
+    class Process:
+        returncode = 0
+        stderr = None
+
+        class Stdout:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise StopAsyncIteration
+
+        stdout = Stdout()
+
+        async def wait(self):
+            return 0
+
+    async def spawn(*args, **_kwargs):
+        called.extend(args)
+        return Process()
+
+    with patch("asyncio.create_subprocess_exec", new=spawn):
+        asyncio.run(CliSubprocessAdapter(conn).complete([{"role": "user", "content": "test"}]))
+
+    assert called[:4] == [
+        "agy", "--dangerously-skip-permissions", "--model", "gemini-3.8-flash-high",
+    ]
+    assert called[4:] == ["--print", "test"]
+
+
+def test_cli_bridge_drains_stderr_before_wait(tmp_path):
+    conn = ConnectionConfig(
+        "opencode_cli", "opencode", protocol="cli_subprocess",
+        model_id="opencode/big-pickle", command="opencode", cwd=str(tmp_path),
+    )
+    stderr_drained = asyncio.Event()
+
+    class Stream:
+        def __init__(self, values, done=None):
+            self.values = iter(values)
+            self.done = done
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self.values)
+            except StopIteration:
+                if self.done:
+                    self.done.set()
+                raise StopAsyncIteration
+
+    class Process:
+        returncode = 0
+        stdout = Stream([b"OK\n"])
+        stderr = Stream([b"diagnostic\n"], stderr_drained)
+
+        async def wait(self):
+            await asyncio.wait_for(stderr_drained.wait(), timeout=1)
+            return 0
+
+    async def spawn(*_args, **_kwargs):
+        return Process()
+
+    with patch("asyncio.create_subprocess_exec", new=spawn):
+        response = asyncio.run(
+            CliSubprocessAdapter(conn).complete([{"role": "user", "content": "test"}])
+        )
+
+    assert response.message.text == "OK"

@@ -198,7 +198,7 @@ Think Along / Talo 웹 애플리케이션(`/settings/connections` 또는 모바�
 - **Codex MCP**: `codex mcp-server`를 stdio로 등록하여 Codex 도구와 추론 능력을 Talo에 주입.
 - **Think Along 서버 MCP (공식 내장)**:
   - 엔드포인트: `https://mcp.flowpulse.ai.kr/mcp`
-  - 인증: OAuth 승인 키 `335d3b38936e1d6d137b71fb32d9e2f667bc6f194540a64cc6f161fff0f3116a`
+  - 인증: `THINK_ALONG_OAUTH_KEY` 환경변수 또는 macOS Keychain
   - 원격 메모리, 크로스 세션 컨텍스트, 조직 지식베이스를 Talo 세션에 즉시 바인딩.
 
 ---
@@ -259,7 +259,7 @@ status = "active"
 [connections.think_along_mcp]
 bridge = "mcp_sse"
 url = "https://mcp.flowpulse.ai.kr/mcp"
-credential_ref = "oauth:335d3b38936e1d6d137b71fb32d9e2f667bc6f194540a64cc6f161fff0f3116a"
+credential_ref = "env:THINK_ALONG_OAUTH_KEY"
 status = "active"
 ```
 
@@ -268,20 +268,20 @@ status = "active"
 ## 7. 구현 로드맵 및 마일스톤 (Implementation Roadmap)
 
 ### Phase 1 (P0): CLI 대화형 온보딩 & 로컬 자동 감지 (1주 차)
-- [ ] `talo.discovery`: 환경변수 및 로컬 auth 파일(`~/.codex`, OpenCode, Ollama) 자동 스캔 모듈 구현.
-- [ ] `talo setup`: Rich 기반의 인터랙티브 화살표/단축키 TUI 마법사 구현.
-- [ ] DeepCode, OpenRouter, Gemini 원클릭 프리셋 템플릿 내장.
-- [ ] 설정 즉시 Live Ping 검증 및 결과 시각화.
+- [x] 환경변수 및 로컬 auth 파일(Codex, OpenCode, AGY) 자동 스캔 구현.
+- [x] `talo setup` Rich 기반 번호 선택 TUI 마법사 구현. 화살표 탐색은 후속 개선 항목.
+- [x] DeepCode, OpenRouter, Gemini 및 로컬 CLI 프리셋 내장.
+- [x] API 연결 Live Ping·모델 조회와 로컬 CLI 설치/OAuth 상태 검증 결과 표시.
 
 ### Phase 2 (P1): Web AI Connection Hub 고도화 (2주 차)
 - [ ] Next.js 웹 내 `/api/ai/discovery` 엔드포인트 신설.
-- [ ] Hermes 스타일 연결 관리 컴포넌트(공급자 카드 그리드, 실시간 핑, 모델 드롭다운) 제작.
+- [x] 웹 공급자 계정 화면, 공급자 카드, 연결 테스트, 모델 선택 UI 제작.
 - [ ] 로컬 스토리지 및 서버 계정 간의 양방향 동기화.
 
 ### Phase 3 (P2): CLI Subprocess & MCP 하이브리드 브릿지 (3주 차)
 - [ ] `talo.integrations.mcp`: stdio 및 HTTP/SSE MCP 클라이언트 연동.
 - [ ] Think Along 공식 MCP (`https://mcp.flowpulse.ai.kr/mcp`) 원클릭 프리셋 활성화.
-- [ ] Codex stdio MCP 브릿지 어댑터 추가.
+- [x] Codex·OpenCode·AGY OAuth CLI subprocess 브릿지 추가.
 
 ---
 

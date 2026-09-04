@@ -79,11 +79,118 @@ SERVICE_PRESETS: dict[str, dict[str, Any]] = {
         "label": "Codex CLI (OAuth)",
         "description": "로컬 Codex CLI의 ChatGPT 로그인 세션 사용 (API 키 불필요)",
         "base_url": "",
-        "default_models": ["gpt-5.6-sol"],
+        "default_models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"],
         "env_names": [],
         "key_hint": "",
         "bridge": "cli_subprocess",
         "command": "codex",
+    },
+    "opencode": {
+        "label": "OpenCode Zen",
+        "description": "로컬 OpenCode 로그인 세션과 검증된 Zen 모델 사용",
+        "base_url": "",
+        "default_models": [
+            "opencode/big-pickle",
+            "opencode/claude-fable-5-1",
+            "opencode/glm-5.2",
+            "opencode/deepseek-v4-flash",
+            "opencode/kimi-k3",
+            "opencode/muse-spark-1.3-contributor-free",
+            "opencode/ling-3.0-flash-fin-free",
+            "opencode/nemotron-3.5-lightning-free",
+            "opencode/muse-spark-1.2-contributor-free",
+            "opencode/nemotron-3-ultra-free",
+            "opencode/mimo-v2.5-free",
+            "opencode/gemini-3.8-flash",
+            "opencode/gemini-3.7-flash",
+            "opencode/grok-4.6",
+            "opencode/muse-spark-1.2",
+            "opencode/claude-opus-5",
+            "opencode/gemini-3.5-flash-lite",
+            "opencode/gemini-3.6-flash",
+            "opencode/gpt-5.6-luna",
+            "opencode/gpt-5.6-sol",
+            "opencode/gpt-5.6-terra",
+            "opencode/grok-4.5",
+        ],
+        "model_labels": {
+            "opencode/big-pickle": "Big Pickle",
+            "opencode/claude-fable-5-1": "Claude Fable 5.1",
+            "opencode/glm-5.2": "GLM-5.2",
+            "opencode/deepseek-v4-flash": "DeepSeek V4 Flash",
+            "opencode/kimi-k3": "Kimi K3",
+            "opencode/muse-spark-1.3-contributor-free": "Muse Spark 1.3",
+            "opencode/ling-3.0-flash-fin-free": "Ling 3.0 Flash Fin",
+            "opencode/nemotron-3.5-lightning-free": "Nemotron 3.5 Lightning",
+            "opencode/muse-spark-1.2-contributor-free": "Muse Spark 1.2",
+            "opencode/nemotron-3-ultra-free": "Nemotron 3 Ultra",
+            "opencode/mimo-v2.5-free": "MiMo V2.5",
+            "opencode/gemini-3.8-flash": "Gemini 3.8 Flash",
+            "opencode/gemini-3.7-flash": "Gemini 3.7 Flash",
+            "opencode/grok-4.6": "Grok 4.6",
+            "opencode/muse-spark-1.2": "Muse Spark 1.2",
+            "opencode/claude-opus-5": "Claude Opus 5",
+            "opencode/gemini-3.5-flash-lite": "Gemini 3.5 Flash Lite",
+            "opencode/gemini-3.6-flash": "Gemini 3.6 Flash",
+            "opencode/gpt-5.6-luna": "GPT-5.6 Luna",
+            "opencode/gpt-5.6-sol": "GPT-5.6 Sol",
+            "opencode/gpt-5.6-terra": "GPT-5.6 Terra",
+            "opencode/grok-4.5": "Grok 4.5",
+        },
+        "free_models": [
+            "opencode/big-pickle",
+            "opencode/muse-spark-1.3-contributor-free",
+            "opencode/ling-3.0-flash-fin-free",
+            "opencode/nemotron-3.5-lightning-free",
+            "opencode/muse-spark-1.2-contributor-free",
+            "opencode/nemotron-3-ultra-free",
+            "opencode/mimo-v2.5-free",
+        ],
+        "env_names": [],
+        "key_hint": "",
+        "bridge": "cli_subprocess",
+        "command": "opencode",
+    },
+    "agy": {
+        "label": "Google AGY",
+        "description": "로컬 AGY 로그인 세션 사용 (권한 자동 승인)",
+        "base_url": "",
+        "default_models": [
+            "gemini-3.8-flash-high",
+            "gemini-3.8-flash-medium",
+            "gemini-3.8-flash-low",
+            "gemini-3.7-flash-high",
+            "gemini-3.7-flash-medium",
+            "gemini-3.7-flash-low",
+            "gemini-3.6-flash-high",
+            "gemini-3.6-flash-medium",
+            "gemini-3.6-flash-low",
+            "gemini-3.1-pro-high",
+            "gemini-3.1-pro-low",
+            "claude-sonnet-4-6",
+            "claude-opus-4-6-thinking",
+            "gpt-oss-120b-medium",
+        ],
+        "model_labels": {
+            "gemini-3.8-flash-high": "Gemini 3.8 Flash (High)",
+            "gemini-3.8-flash-medium": "Gemini 3.8 Flash (Medium)",
+            "gemini-3.8-flash-low": "Gemini 3.8 Flash (Low)",
+            "gemini-3.7-flash-high": "Gemini 3.7 Flash (High)",
+            "gemini-3.7-flash-medium": "Gemini 3.7 Flash (Medium)",
+            "gemini-3.7-flash-low": "Gemini 3.7 Flash (Low)",
+            "gemini-3.6-flash-high": "Gemini 3.6 Flash (High)",
+            "gemini-3.6-flash-medium": "Gemini 3.6 Flash (Medium)",
+            "gemini-3.6-flash-low": "Gemini 3.6 Flash (Low)",
+            "gemini-3.1-pro-high": "Gemini 3.1 Pro (High)",
+            "gemini-3.1-pro-low": "Gemini 3.1 Pro (Low)",
+            "claude-sonnet-4-6": "Claude Sonnet 4.6 (Thinking)",
+            "claude-opus-4-6-thinking": "Claude Opus 4.6 (Thinking)",
+            "gpt-oss-120b-medium": "GPT-OSS 120B (Medium)",
+        },
+        "env_names": [],
+        "key_hint": "",
+        "bridge": "cli_subprocess",
+        "command": "agy",
     },
     "think_along": {
         "label": "Think Along Cloud MCP",
@@ -91,8 +198,7 @@ SERVICE_PRESETS: dict[str, dict[str, Any]] = {
         "base_url": "https://mcp.flowpulse.ai.kr/mcp",
         "default_models": ["flowpulse/thinking-router"],
         "env_names": ["THINK_ALONG_OAUTH_KEY"],
-        "key_hint": "OAuth 승인 키 (335d3b38...)",
-        "default_key": "335d3b38936e1d6d137b71fb32d9e2f667bc6f194540a64cc6f161fff0f3116a",
+        "key_hint": "OAuth 승인 키",
     },
     "custom": {
         "label": "직접 설정",
@@ -122,8 +228,7 @@ def run_first_time_guide(config: Config, store: CredentialStore) -> bool:
         ("3", "나중에 하기", "연결 없이 기본 도움말 화면으로 이동합니다"),
     ]
 
-    for key, title, desc in options:
-        render.console.print(f"  [{key}] [bold]{title}[/bold] — {desc}")
+    render.menu_table("시작 메뉴", options)
 
     try:
         choice = input("\n선택 (1/2/3) [1]: ").strip() or "1"
@@ -211,13 +316,41 @@ def scan_local_environment() -> list[dict[str, Any]]:
         })
 
     opencode_auth = Path.home() / ".local" / "share" / "opencode" / "auth.json"
-    if opencode_auth.exists():
+    if opencode_auth.exists() and shutil.which("opencode"):
+        discovered.append({
+            "type": "cli_bridge",
+            "provider": "opencode",
+            "title": "OpenCode (~/.local/share/opencode)",
+            "base_url": "",
+            "model": "opencode/big-pickle",
+            "credential_ref": "",
+            "has_secret": True,
+            "secret": "cli_oauth",
+            "desc": "OpenCode 로그인 세션 감지됨 (Zen 모델 즉시 연결)",
+            "supported": True,
+        })
+    elif opencode_auth.exists():
         discovered.append({
             "type": "tool_install",
             "provider": "opencode",
             "title": "OpenCode (~/.local/share/opencode)",
-            "desc": "설치됨 (auth.json 공급자 키 관리 중)",
+            "desc": "설치됨 (OpenCode 실행 파일 확인 필요)",
             "supported": False,
+        })
+
+    agy_home = Path.home() / ".gemini" / "antigravity-cli"
+    if agy_home.exists() and shutil.which("agy"):
+        discovered.append({
+            "type": "cli_bridge",
+            "provider": "agy",
+            "title": "Google AGY (Antigravity)",
+            "base_url": "",
+            "model": "gemini-3.8-flash-high",
+            "credential_ref": "",
+            "has_secret": True,
+            "secret": "cli_oauth",
+            "desc": "AGY 로그인 세션 감지됨 (권한 자동 승인 모드)",
+            "supported": True,
         })
 
     # 4. 로컬 LLM 서버 (Ollama, LM Studio)
@@ -247,14 +380,17 @@ def run_existing_discovery(config: Config, store: CredentialStore) -> bool:
         render.console.print("새 AI 서비스를 직접 연결합니다.\n")
         return run_service_picker(config, store)
 
-    render.console.print(f"{len(discovered)}개의 연결 후보 및 로컬 도구를 발견했습니다:\n")
-    for i, item in enumerate(discovered, 1):
-        status_tag = "[green]즉시 사용 가능[/green]" if item.get("has_secret") else "[dim]안내[/dim]"
-        render.console.print(f"  [{i}] [bold]{item['title']}[/bold] — {status_tag}")
-        render.console.print(f"      {item['desc']}")
-
-    render.console.print(f"  [{len(discovered) + 1}] 직접 새 AI 서비스 선택하기")
-    render.console.print("  [0] 취소")
+    render.console.print(f"{len(discovered)}개의 연결 후보와 로컬 도구를 발견했습니다.\n")
+    render.menu_table("발견된 연결", [
+        (
+            str(i), item["title"],
+            f"{'즉시 사용 가능' if item.get('has_secret') else '설정 필요'} · {item['desc']}",
+        )
+        for i, item in enumerate(discovered, 1)
+    ] + [
+        (str(len(discovered) + 1), "새 서비스 연결", "AI 서비스 목록에서 직접 선택합니다"),
+        ("0", "취소", "이전 화면으로 돌아갑니다"),
+    ])
 
     try:
         raw = input(f"\n선택 (1~{len(discovered) + 1}, 0=취소) [1]: ").strip() or "1"
@@ -282,13 +418,14 @@ def run_existing_discovery(config: Config, store: CredentialStore) -> bool:
 
         # 즉시 검증 및 연결
         render.console.print(f"\n[bold green]'{chosen['title']}' 연결을 진행합니다.[/bold green]")
-        if chosen.get("provider") == "codex_cli" or chosen.get("type") == "cli_bridge":
-            preset = SERVICE_PRESETS.get("codex_cli", {
+        if chosen.get("type") == "cli_bridge":
+            provider_id = chosen.get("provider", "codex_cli")
+            preset = SERVICE_PRESETS.get(provider_id, SERVICE_PRESETS.get("codex_cli", {
                 "label": "Codex CLI (OAuth)",
                 "command": "codex",
                 "default_models": ["gpt-5.6-sol", "gpt-4o", "o3-mini"],
-            })
-            return _finalize_cli_bridge_connection(config, "codex_cli", preset)
+            }))
+            return _finalize_cli_bridge_connection(config, provider_id, preset)
 
         return _finalize_connection(
             config=config,
@@ -311,11 +448,10 @@ def run_service_picker(config: Config, store: CredentialStore) -> bool:
     render.console.print("검증된 서비스 프리셋으로 엔드포인트 주소가 자동 설정됩니다.\n")
 
     preset_keys = list(SERVICE_PRESETS.keys())
-    for i, key in enumerate(preset_keys, 1):
-        item = SERVICE_PRESETS[key]
-        render.console.print(f"  [{i}] [bold]{item['label']}[/bold] — {item['description']}")
-
-    render.console.print("  [0] 취소")
+    render.menu_table("AI 서비스", [
+        (str(i), SERVICE_PRESETS[key]["label"], SERVICE_PRESETS[key]["description"])
+        for i, key in enumerate(preset_keys, 1)
+    ] + [("0", "취소", "이전 화면으로 돌아갑니다")])
 
     try:
         raw = input(f"\n선택 (1~{len(preset_keys)}, 0=취소) [1]: ").strip() or "1"
@@ -362,24 +498,7 @@ def _prompt_credentials_and_connect(
 ) -> bool:
     label = preset["label"]
     key_hint = preset["key_hint"]
-    default_key = preset.get("default_key")
-
     render.console.print(f"\n[bold]{label} 연결 설정[/bold]")
-
-    # Think Along 공식 MCP인 경우 기본 토큰 제공
-    if default_key:
-        render.console.print(f"공식 승인 토큰이 미리 준비되어 있습니다.")
-        use_default = input(f"기본 토큰을 사용하시겠습니까? (Y/n): ").strip().lower()
-        if use_default not in {"n", "no"}:
-            return _finalize_connection(
-                config=config,
-                store=store,
-                provider_id=provider_id,
-                base_url=base_url,
-                credential_ref="keychain:think_along_mcp",
-                secret=default_key,
-                suggested_model=preset["default_models"][0] if preset["default_models"] else "default",
-            )
 
     # 환경변수에 이미 키가 있는지 우선 확인
     for env_name in preset.get("env_names", []):
@@ -592,27 +711,92 @@ def _finalize_connection(
 # S12. 대화 중 /model 및 CLI talo model (모델 선택 및 전환)
 # --------------------------------------------------------------------------
 def run_model_picker(config: Config) -> str | None:
-    """등록된 연결 중 사용할 모델을 선택하고 기본 모델로 전환."""
+    """연결별 사용 가능한 모델을 한 화면에서 선택."""
     conns = list(config.connections.values())
+    opencode_ready = bool(
+        shutil.which("opencode")
+        and (Path.home() / ".local/share/opencode/auth.json").exists()
+    )
+    if opencode_ready and not any(c.provider_id == "opencode" for c in conns):
+        conns.append(ConnectionConfig(
+            "opencode_cli", "opencode", protocol="cli_subprocess",
+            base_url="", credential_ref="", model_id="opencode/big-pickle",
+            command="opencode", cwd=str(Path.cwd()), validated_at="local_session",
+        ))
+    agy_ready = bool(
+        shutil.which("agy")
+        and (Path.home() / ".gemini/antigravity-cli").exists()
+    )
+    if agy_ready and not any(c.provider_id == "agy" for c in conns):
+        conns.append(ConnectionConfig(
+            "agy_cli", "agy", protocol="cli_subprocess",
+            base_url="", credential_ref="", model_id="gemini-3.8-flash-high",
+            command="agy", cwd=str(Path.cwd()), validated_at="local_session",
+        ))
     if not conns:
         render.console.print("[yellow]연결된 AI가 없습니다. `talo setup`으로 먼저 연결하세요.[/yellow]")
         return None
 
     active = config.default_model or ""
-    active_conn_id = active.split(":")[0] if active else ""
+    categories = [
+        ("openai", "OpenAI"),
+        ("claude", "Claude"),
+        ("deepseek", "DeepSeek"),
+        ("kimi", "Kimi"),
+        ("opencode", "OpenCode"),
+        ("google", "Google"),
+        ("etc", "ETC"),
+    ]
+    grouped: dict[str, list[tuple[ConnectionConfig, str, str, str, bool]]] = {
+        key: [] for key, _label in categories
+    }
+    for conn in conns:
+        preset_id = "codex_cli" if conn.provider_id == "codex" else conn.provider_id
+        preset = SERVICE_PRESETS.get(preset_id, {})
+        current_model = config.selected_model_id(conn) or conn.model_id
+        models = list(dict.fromkeys(
+            [current_model, *preset.get("default_models", [])]
+            if current_model else preset.get("default_models", [])
+        ))
+        label = preset.get("label", conn.provider_id)
+        model_labels = preset.get("model_labels", {})
+        free_models = set(preset.get("free_models", []))
+        for model in models:
+            leaf = model.rsplit("/", 1)[-1].lower()
+            if conn.provider_id in {"agy", "gemini"} or "gemini" in leaf:
+                category = "google"
+            elif leaf.startswith("gpt-") or conn.provider_id in {"openai", "codex", "codex_cli"}:
+                category = "openai"
+            elif "claude" in leaf or conn.provider_id == "anthropic":
+                category = "claude"
+            elif "deepseek" in leaf or conn.provider_id == "deepseek":
+                category = "deepseek"
+            elif "kimi" in leaf:
+                category = "kimi"
+            elif leaf == "big-pickle" or leaf.startswith("muse-"):
+                category = "opencode"
+            else:
+                category = "etc"
+            grouped[category].append((
+                conn, model, model_labels.get(model, model), label, model in free_models,
+            ))
 
-    render.console.print("\n[bold cyan]사용할 모델을 선택하세요:[/bold cyan]\n")
-    for i, c in enumerate(conns, 1):
-        is_active = (c.connection_id == active_conn_id)
-        marker = " [bold green]● (현재 사용 중)[/bold green]" if is_active else ""
-        render.console.print(f"  [{i}] [bold]{c.connection_id}[/bold] ({c.model_id}){marker}")
-        render.console.print(f"      공급자: {c.provider_id} · 엔드포인트: {c.base_url}")
-
-    render.console.print(f"  [{len(conns) + 1}] 새 AI 연결 추가하기")
-    render.console.print("  [0] 취소")
+    direct_idx = len(categories) + 1
+    connect_idx = direct_idx + 1
+    render.menu_table("모델 계열", [
+        (
+            str(i), label,
+            f"{len(grouped[key])}개 모델" if grouped[key] else "연결 필요",
+        )
+        for i, (key, label) in enumerate(categories, 1)
+    ] + [
+        (str(direct_idx), "모델 ID 직접 입력", "연결과 모델 ID를 직접 지정합니다"),
+        (str(connect_idx), "새 AI 연결", "다른 AI 서비스를 추가합니다"),
+        ("0", "취소", "현재 모델을 그대로 사용합니다"),
+    ])
 
     try:
-        raw = input(f"\n선택 (1~{len(conns) + 1}, 0=취소): ").strip()
+        raw = input(f"\n선택 (1~{connect_idx}, 0=취소): ").strip()
     except (KeyboardInterrupt, EOFError):
         return None
 
@@ -624,18 +808,64 @@ def run_model_picker(config: Config) -> str | None:
     except ValueError:
         return None
 
-    if idx == len(conns):
+    if idx == connect_idx - 1:
         store = CredentialStore()
         run_service_picker(config, store)
         return config.default_model
 
-    if 0 <= idx < len(conns):
-        selected_conn = conns[idx]
-        target = f"{selected_conn.connection_id}:{selected_conn.model_id}"
-        config.set_default_model(target)
-        render.console.print(f"\n[green]✓ 기본 모델이 '{target}'(으)로 변경되었습니다.[/green]")
-        return target
-    return None
+    if idx == direct_idx - 1:
+        saved_conns = list(config.connections.values())
+        if not saved_conns:
+            render.console.print("[yellow]직접 입력할 연결이 없습니다. 새 AI 연결을 먼저 추가하세요.[/yellow]")
+            return None
+        render.menu_table("연결 선택", [
+            (str(i), conn.connection_id, conn.provider_id)
+            for i, conn in enumerate(saved_conns, 1)
+        ])
+        try:
+            conn_idx = int(input(f"\n연결 선택 (1~{len(saved_conns)}): ").strip()) - 1
+            chosen_model = input("모델 ID 직접 입력: ").strip()
+        except (KeyboardInterrupt, EOFError):
+            return None
+        except ValueError:
+            return None
+        if not (0 <= conn_idx < len(saved_conns)) or not chosen_model:
+            return None
+        selected_conn = saved_conns[conn_idx]
+    elif 0 <= idx < len(categories):
+        category_key, category_label = categories[idx]
+        entries = grouped[category_key]
+        if not entries:
+            render.console.print(f"[yellow]{category_label} 연결이 없습니다. `talo setup`으로 연결하세요.[/yellow]")
+            return None
+        render.menu_table(f"{category_label} 모델", [
+            (
+                str(i),
+                f"{'● ' if active == f'{conn.connection_id}:{model}' else ''}{model_label}",
+                " · ".join(filter(None, [
+                    "현재 선택" if active == f"{conn.connection_id}:{model}" else "",
+                    "Free" if is_free else "",
+                    provider_label,
+                ])),
+            )
+            for i, (conn, model, model_label, provider_label, is_free) in enumerate(entries, 1)
+        ] + [("0", "취소", "모델 선택을 취소합니다")])
+        try:
+            model_idx = int(input(f"\n선택 (1~{len(entries)}, 0=취소): ").strip()) - 1
+        except (KeyboardInterrupt, EOFError, ValueError):
+            return None
+        if not (0 <= model_idx < len(entries)):
+            return None
+        selected_conn, chosen_model, _model_label, _provider_label, _is_free = entries[model_idx]
+        if selected_conn.connection_id not in config.connections:
+            config.set_connection(selected_conn)
+    else:
+        return None
+
+    target = f"{selected_conn.connection_id}:{chosen_model}"
+    config.set_default_model(target)
+    render.console.print(f"\n[green]✓ 기본 모델이 '{target}'(으)로 변경되었습니다.[/green]")
+    return target
 
 
 # --------------------------------------------------------------------------
@@ -651,16 +881,14 @@ def run_connect_interactive(config: Config, store: CredentialStore) -> int:
     render.connections_table(conns, active_id)
 
     menu = [
-        ("1", "새 AI 서비스 연결하기 (프리셋 마법사)"),
-        ("2", "기존 로컬 연결 자동 감지"),
-        ("3", "활성 모델 변경"),
-        ("4", "연결 상태 전체 검증"),
-        ("5", "연결 해제 (삭제)"),
-        ("0", "나가기"),
+        ("1", "새 연결", "검증된 서비스 프리셋으로 AI를 연결합니다"),
+        ("2", "자동 감지", "환경변수와 로컬 CLI 연결을 찾습니다"),
+        ("3", "모델 변경", "현재 사용할 AI 모델을 선택합니다"),
+        ("4", "연결 검증", "등록된 연결의 상태를 모두 확인합니다"),
+        ("5", "연결 해제", "더 이상 쓰지 않는 연결을 삭제합니다"),
+        ("0", "나가기", "대화형 연결 관리를 종료합니다"),
     ]
-    render.console.print("\n[bold cyan]수행할 작업을 선택하세요:[/bold cyan]")
-    for k, title in menu:
-        render.console.print(f"  [{k}] {title}")
+    render.menu_table("연결 관리", menu)
 
     try:
         choice = input("\n선택 (0~5) [1]: ").strip() or "1"

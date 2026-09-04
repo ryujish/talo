@@ -64,7 +64,7 @@ talo model (CLI)     ───→     POST /api/connections/active ──→  �
 | `db.ts` (웹) | `process.env`에서 키 읽음 | ✅ 서버 사이드만 접근 |
 | `data/db.json` | Thinkings의 `answer`에 AI 응답 평문 저장 | ⚠️ AI 프롬프트 응답이 디스크에 평문 |
 | `connection_wizard.py` | 키체인 저장 시 `getpass` 사용 | ✅ 히스토리 미유지 |
-| MCP OAuth 키 | `connection_wizard.py:95`에 하드코딩 | 🔴 `335d3b38...` 토큰 소스코드에 노출 |
+| MCP OAuth 키 | `THINK_ALONG_OAUTH_KEY` 또는 Keychain 참조 | ✅ 소스코드에 실제 키 미저장 |
 
 ### 이번 턴 보안 경계 제안
 
@@ -72,8 +72,8 @@ talo model (CLI)     ───→     POST /api/connections/active ──→  �
    - 웹 API는 `credential_ref`만 노출, 실제 키 해석은 서버 사이드에서만
    - `GET /api/connections` 응답에 `keychain:xxx` → `***` 마스킹
 
-2. **MCP OAuth 하드코딩 제거**:
-   - `default_key` 필드를 config.toml 외부로 분리하거나 사용자 입력으로 전환
+2. **MCP OAuth 하드코딩 제거 완료**:
+   - 환경변수 또는 사용자 마스킹 입력과 Keychain 저장만 사용
 
 3. **`data/db.json` Thinkings 보안**:
    - AI 응답에 민감 정보가 포함될 수 있음 → 파일 권한 `0600` 보장

@@ -431,6 +431,8 @@ async def _validate_async(conn: ConnectionConfig, resolver: Any) -> tuple[bool, 
 CLI_BRIDGE_PRESETS: dict[str, dict[str, str]] = {
     "codex_cli": {"command": "codex", "label": "Codex CLI (OAuth)", "default_model": "gpt-5.6-sol"},
     "codex": {"command": "codex", "label": "Codex CLI (OAuth)", "default_model": "gpt-5.6-sol"},
+    "opencode": {"command": "opencode", "label": "OpenCode Zen", "default_model": "opencode/big-pickle"},
+    "agy": {"command": "agy", "label": "Google AGY", "default_model": "gemini-3.8-flash-high"},
 }
 
 
