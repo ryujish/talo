@@ -16,6 +16,7 @@ import asyncio
 import getpass
 import os
 import shutil
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,71 @@ from talo.cli import render
 from talo.config import Config, ConnectionConfig
 from talo.providers.resolver import CredentialStore
 from talo.schemas import ExitCode
+
+
+def _choose_menu(title: str, rows: list[tuple[str, str, str]], prompt: str,
+                 default: str | None = None, cancel_key: str | None = None) -> str:
+    """TTY에서는 화살표 선택, 자동화에서는 기존 번호 입력을 사용한다. Esc로 이전/취소."""
+    if cancel_key is None:
+        for k, name, _desc in rows:
+            clean_name = name.strip().lower()
+            clean_k = k.strip().lower()
+            if clean_k in ("0", "-1", "cancel", "back", "취소", "이전", "종료"):
+                cancel_key = k
+                break
+            if clean_name in ("취소", "이전", "이전으로", "종료", "cancel", "back", "exit", "quit"):
+                cancel_key = k
+                break
+            if clean_name.startswith(("취소", "이전으로", "cancel", "back")):
+                cancel_key = k
+                break
+    if cancel_key is None and rows:
+        cancel_key = rows[-1][0]
+
+    if sys.stdin.isatty():
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if not (loop and loop.is_running()):
+            from prompt_toolkit.shortcuts import choice
+            from prompt_toolkit.styles import Style
+            from prompt_toolkit.key_binding import KeyBindings
+
+            kb = KeyBindings()
+
+            @kb.add("escape")
+            def _on_escape(event: Any) -> None:
+                event.app.exit(result=cancel_key)
+
+            width = max((len(name) for _key, name, _desc in rows), default=0)
+            try:
+                return choice(
+                    message=title,
+                    options=[(key, f"{name:<{width}}  {desc}") for key, name, desc in rows],
+                    default=default or rows[0][0],
+                    symbol="●",
+                    bottom_toolbar="↑↓ 이동  Enter 선택  Esc 이전/취소",
+                    key_bindings=kb,
+                    style=Style.from_dict({
+                        "selected-option": "bg:#ffaf87 #1c1c1c bold",
+                        "option": "#bcbcbc",
+                        "bottom-toolbar": "bg:#303030 #8b949e",
+                    }),
+                )
+            except (KeyboardInterrupt, EOFError):
+                return cancel_key or (default or "")
+
+    render.menu_table(title, rows)
+    try:
+        val = input(prompt).strip()
+        if val.lower() in ("esc", "q", "quit", "exit", "back"):
+            return cancel_key or (default or "")
+        return val or (default or "")
+    except (KeyboardInterrupt, EOFError):
+        return cancel_key or (default or "")
+
 
 # --------------------------------------------------------------------------
 # 서비스 프리셋 정의 (Base URL 및 기본 추천 모델 카탈로그)
@@ -228,10 +294,8 @@ def run_first_time_guide(config: Config, store: CredentialStore) -> bool:
         ("3", "나중에 하기", "연결 없이 기본 도움말 화면으로 이동합니다"),
     ]
 
-    render.menu_table("시작 메뉴", options)
-
     try:
-        choice = input("\n선택 (1/2/3) [1]: ").strip() or "1"
+        choice = _choose_menu("시작 메뉴", options, "\n선택 (1/2/3) [1]: ", "1")
     except (KeyboardInterrupt, EOFError):
         render.console.print("\n[dim]설정이 취소되었습니다.[/dim]")
         return False
@@ -381,7 +445,7 @@ def run_existing_discovery(config: Config, store: CredentialStore) -> bool:
         return run_service_picker(config, store)
 
     render.console.print(f"{len(discovered)}개의 연결 후보와 로컬 도구를 발견했습니다.\n")
-    render.menu_table("발견된 연결", [
+    rows = [
         (
             str(i), item["title"],
             f"{'즉시 사용 가능' if item.get('has_secret') else '설정 필요'} · {item['desc']}",
@@ -390,10 +454,11 @@ def run_existing_discovery(config: Config, store: CredentialStore) -> bool:
     ] + [
         (str(len(discovered) + 1), "새 서비스 연결", "AI 서비스 목록에서 직접 선택합니다"),
         ("0", "취소", "이전 화면으로 돌아갑니다"),
-    ])
+    ]
 
     try:
-        raw = input(f"\n선택 (1~{len(discovered) + 1}, 0=취소) [1]: ").strip() or "1"
+        raw = _choose_menu("발견된 연결", rows,
+                           f"\n선택 (1~{len(discovered) + 1}, 0=취소) [1]: ", "1")
     except (KeyboardInterrupt, EOFError):
         return False
 
@@ -448,13 +513,14 @@ def run_service_picker(config: Config, store: CredentialStore) -> bool:
     render.console.print("검증된 서비스 프리셋으로 엔드포인트 주소가 자동 설정됩니다.\n")
 
     preset_keys = list(SERVICE_PRESETS.keys())
-    render.menu_table("AI 서비스", [
+    rows = [
         (str(i), SERVICE_PRESETS[key]["label"], SERVICE_PRESETS[key]["description"])
         for i, key in enumerate(preset_keys, 1)
-    ] + [("0", "취소", "이전 화면으로 돌아갑니다")])
+    ] + [("0", "취소", "이전 화면으로 돌아갑니다")]
 
     try:
-        raw = input(f"\n선택 (1~{len(preset_keys)}, 0=취소) [1]: ").strip() or "1"
+        raw = _choose_menu("AI 서비스", rows,
+                           f"\n선택 (1~{len(preset_keys)}, 0=취소) [1]: ", "1")
     except (KeyboardInterrupt, EOFError):
         return False
 
@@ -656,15 +722,24 @@ def _finalize_connection(
 
     chosen_model = ""
     if candidate_models:
-        render.console.print("\n[bold cyan]어떤 모델로 작업할까요?[/bold cyan]")
-        for i, m in enumerate(candidate_models, 1):
-            star = " (추천)" if i == 1 else ""
-            render.console.print(f"  [{i}] {m}{star}")
-        render.console.print(f"  [{len(candidate_models) + 1}] 모델 ID 직접 입력")
+        model_rows = [
+            (str(i), model, "추천" if i == 1 else "")
+            for i, model in enumerate(candidate_models, 1)
+        ] + [
+            (str(len(candidate_models) + 1), "모델 ID 직접 입력", "목록에 없는 모델 사용"),
+            ("0", "취소", "연결 설정을 취소하고 이전으로 돌아갑니다"),
+        ]
 
         try:
-            m_choice = input(f"\n선택 (1~{len(candidate_models) + 1}) [1]: ").strip() or "1"
+            m_choice = _choose_menu(
+                "어떤 모델로 작업할까요?", model_rows,
+                f"\n선택 (1~{len(candidate_models) + 1}, 0=취소) [1]: ", "1",
+            )
         except (KeyboardInterrupt, EOFError):
+            return False
+
+        if m_choice in ("0", "cancel", ""):
+            render.console.print("[dim]연결 설정이 취소되었습니다.[/dim]")
             return False
 
         try:
@@ -783,7 +858,7 @@ def run_model_picker(config: Config) -> str | None:
 
     direct_idx = len(categories) + 1
     connect_idx = direct_idx + 1
-    render.menu_table("모델 계열", [
+    category_rows = [
         (
             str(i), label,
             f"{len(grouped[key])}개 모델" if grouped[key] else "연결 필요",
@@ -793,74 +868,87 @@ def run_model_picker(config: Config) -> str | None:
         (str(direct_idx), "모델 ID 직접 입력", "연결과 모델 ID를 직접 지정합니다"),
         (str(connect_idx), "새 AI 연결", "다른 AI 서비스를 추가합니다"),
         ("0", "취소", "현재 모델을 그대로 사용합니다"),
-    ])
+    ]
 
-    try:
-        raw = input(f"\n선택 (1~{connect_idx}, 0=취소): ").strip()
-    except (KeyboardInterrupt, EOFError):
-        return None
-
-    if not raw or raw == "0":
-        return None
-
-    try:
-        idx = int(raw) - 1
-    except ValueError:
-        return None
-
-    if idx == connect_idx - 1:
-        store = CredentialStore()
-        run_service_picker(config, store)
-        return config.default_model
-
-    if idx == direct_idx - 1:
-        saved_conns = list(config.connections.values())
-        if not saved_conns:
-            render.console.print("[yellow]직접 입력할 연결이 없습니다. 새 AI 연결을 먼저 추가하세요.[/yellow]")
-            return None
-        render.menu_table("연결 선택", [
-            (str(i), conn.connection_id, conn.provider_id)
-            for i, conn in enumerate(saved_conns, 1)
-        ])
+    while True:
         try:
-            conn_idx = int(input(f"\n연결 선택 (1~{len(saved_conns)}): ").strip()) - 1
-            chosen_model = input("모델 ID 직접 입력: ").strip()
+            raw = _choose_menu("모델 계열", category_rows,
+                               f"\n선택 (1~{connect_idx}, 0=취소): ")
         except (KeyboardInterrupt, EOFError):
             return None
+
+        if not raw or raw in ("0", "cancel", "취소"):
+            return None
+
+        try:
+            idx = int(raw) - 1
         except ValueError:
             return None
-        if not (0 <= conn_idx < len(saved_conns)) or not chosen_model:
+
+        if idx == connect_idx - 1:
+            store = CredentialStore()
+            run_service_picker(config, store)
+            return config.default_model
+
+        if idx == direct_idx - 1:
+            saved_conns = list(config.connections.values())
+            if not saved_conns:
+                render.console.print("[yellow]직접 입력할 연결이 없습니다. 새 AI 연결을 먼저 추가하세요.[/yellow]")
+                continue
+            connection_rows = [
+                (str(i), conn.connection_id, conn.provider_id)
+                for i, conn in enumerate(saved_conns, 1)
+            ] + [("0", "이전으로", "모델 계열 선택으로 돌아갑니다")]
+            try:
+                conn_raw = _choose_menu("연결 선택", connection_rows,
+                                        f"\n연결 선택 (1~{len(saved_conns)}, 0=이전): ")
+                if not conn_raw or conn_raw in ("0", "cancel"):
+                    continue
+                conn_idx = int(conn_raw) - 1
+                chosen_model = input("모델 ID 직접 입력: ").strip()
+            except (KeyboardInterrupt, EOFError, ValueError):
+                continue
+            if not (0 <= conn_idx < len(saved_conns)) or not chosen_model:
+                continue
+            selected_conn = saved_conns[conn_idx]
+            break
+        elif 0 <= idx < len(categories):
+            category_key, category_label = categories[idx]
+            entries = grouped[category_key]
+            if not entries:
+                render.console.print(f"[yellow]{category_label} 연결이 없습니다. `talo setup`으로 연결하세요.[/yellow]")
+                continue
+            model_rows = [
+                (
+                    str(i),
+                    f"{'● ' if active == f'{conn.connection_id}:{model}' else ''}{model_label}",
+                    " · ".join(filter(None, [
+                        "현재 선택" if active == f"{conn.connection_id}:{model}" else "",
+                        "Free" if is_free else "",
+                        provider_label,
+                    ])),
+                )
+                for i, (conn, model, model_label, provider_label, is_free) in enumerate(entries, 1)
+            ] + [("0", "이전으로", "모델 계열 선택으로 돌아갑니다")]
+            try:
+                model_raw = _choose_menu(f"{category_label} 모델", model_rows,
+                                         f"\n선택 (1~{len(entries)}, 0=이전): ")
+            except (KeyboardInterrupt, EOFError):
+                continue
+            if not model_raw or model_raw in ("0", "cancel"):
+                continue  # Esc 누르면 모델 계열 메뉴(전단계)로 복귀!
+            try:
+                model_idx = int(model_raw) - 1
+            except ValueError:
+                continue
+            if not (0 <= model_idx < len(entries)):
+                continue
+            selected_conn, chosen_model, _model_label, _provider_label, _is_free = entries[model_idx]
+            if selected_conn.connection_id not in config.connections:
+                config.set_connection(selected_conn)
+            break
+        else:
             return None
-        selected_conn = saved_conns[conn_idx]
-    elif 0 <= idx < len(categories):
-        category_key, category_label = categories[idx]
-        entries = grouped[category_key]
-        if not entries:
-            render.console.print(f"[yellow]{category_label} 연결이 없습니다. `talo setup`으로 연결하세요.[/yellow]")
-            return None
-        render.menu_table(f"{category_label} 모델", [
-            (
-                str(i),
-                f"{'● ' if active == f'{conn.connection_id}:{model}' else ''}{model_label}",
-                " · ".join(filter(None, [
-                    "현재 선택" if active == f"{conn.connection_id}:{model}" else "",
-                    "Free" if is_free else "",
-                    provider_label,
-                ])),
-            )
-            for i, (conn, model, model_label, provider_label, is_free) in enumerate(entries, 1)
-        ] + [("0", "취소", "모델 선택을 취소합니다")])
-        try:
-            model_idx = int(input(f"\n선택 (1~{len(entries)}, 0=취소): ").strip()) - 1
-        except (KeyboardInterrupt, EOFError, ValueError):
-            return None
-        if not (0 <= model_idx < len(entries)):
-            return None
-        selected_conn, chosen_model, _model_label, _provider_label, _is_free = entries[model_idx]
-        if selected_conn.connection_id not in config.connections:
-            config.set_connection(selected_conn)
-    else:
-        return None
 
     target = f"{selected_conn.connection_id}:{chosen_model}"
     config.set_default_model(target)
@@ -872,59 +960,61 @@ def run_model_picker(config: Config) -> str | None:
 # S13. talo connect 대화형 관리 메뉴
 # --------------------------------------------------------------------------
 def run_connect_interactive(config: Config, store: CredentialStore) -> int:
-    """talo connect 를 인자 없이 실행했을 때의 대화형 관리 메뉴."""
-    conns = list(config.connections.values())
-    active = config.default_model or ""
-    active_id = active.split(":")[0] if active else None
+    """talo connect 대화형 화면: 연결 목록 확인, 추가, 검증, 삭제를 선택식으로 처리한다."""
+    while True:
+        conns = list(config.connections.values())
+        active = config.default_model
+        active_id = active.split(":")[0] if active else None
 
-    render.console.print("\n[bold]Talo AI 연결 관리[/bold]")
-    render.connections_table(conns, active_id)
+        render.console.print("\n[bold]Talo AI 연결 관리[/bold]")
+        render.connections_table(conns, active_id)
 
-    menu = [
-        ("1", "새 연결", "검증된 서비스 프리셋으로 AI를 연결합니다"),
-        ("2", "자동 감지", "환경변수와 로컬 CLI 연결을 찾습니다"),
-        ("3", "모델 변경", "현재 사용할 AI 모델을 선택합니다"),
-        ("4", "연결 검증", "등록된 연결의 상태를 모두 확인합니다"),
-        ("5", "연결 해제", "더 이상 쓰지 않는 연결을 삭제합니다"),
-        ("0", "나가기", "대화형 연결 관리를 종료합니다"),
-    ]
-    render.menu_table("연결 관리", menu)
-
-    try:
-        choice = input("\n선택 (0~5) [1]: ").strip() or "1"
-    except (KeyboardInterrupt, EOFError):
-        return int(ExitCode.COMPLETED)
-
-    if choice == "1":
-        run_service_picker(config, store)
-    elif choice == "2":
-        run_existing_discovery(config, store)
-    elif choice == "3":
-        run_model_picker(config)
-    elif choice == "4":
-        from talo.providers.resolver import ConnectionResolver
-        resolver = ConnectionResolver(config, store)
-        render.console.print("\n[bold]연결 상태 검증 중...[/bold]")
-        for c in config.connections.values():
-            ok, msg = asyncio.run(resolver.validate(c))
-            mark = "green" if ok else "red"
-            status = "정상 ●" if ok else "실패 ✗"
-            render.console.print(f"  [{mark}]{c.connection_id}[/{mark}]: {status} ({msg})")
-    elif choice == "5":
-        if not conns:
-            render.console.print("[yellow]해제할 연결이 없습니다.[/yellow]")
-            return int(ExitCode.COMPLETED)
-        render.console.print("\n[bold red]삭제할 연결 번호를 선택하세요:[/bold red]")
-        for i, c in enumerate(conns, 1):
-            render.console.print(f"  [{i}] {c.connection_id} ({c.model_id})")
+        menu = [
+            ("1", "새 연결", "검증된 서비스 프리셋으로 AI를 연결합니다"),
+            ("2", "자동 감지", "환경변수와 로컬 CLI 연결을 찾습니다"),
+            ("3", "모델 변경", "현재 사용할 AI 모델을 선택합니다"),
+            ("4", "연결 검증", "등록된 연결의 상태를 모두 확인합니다"),
+            ("5", "연결 해제", "더 이상 쓰지 않는 연결을 삭제합니다"),
+            ("0", "나가기", "대화형 연결 관리를 종료합니다"),
+        ]
         try:
-            del_raw = input(f"삭제 번호 (1~{len(conns)}, Enter=취소): ").strip()
-            if del_raw:
-                del_idx = int(del_raw) - 1
-                if 0 <= del_idx < len(conns):
-                    target_id = conns[del_idx].connection_id
-                    config.remove_connection(target_id)
-                    render.console.print(f"[green]연결 해제됨: {target_id}[/green]")
-        except (ValueError, KeyboardInterrupt, EOFError):
-            pass
-    return int(ExitCode.COMPLETED)
+            choice = _choose_menu("연결 관리", menu, "\n선택 (0~5) [1]: ", "1")
+        except (KeyboardInterrupt, EOFError):
+            return int(ExitCode.COMPLETED)
+
+        if choice in ("0", "exit", "quit", "cancel", ""):
+            return int(ExitCode.COMPLETED)
+        elif choice == "1":
+            run_service_picker(config, store)
+        elif choice == "2":
+            run_existing_discovery(config, store)
+        elif choice == "3":
+            run_model_picker(config)
+        elif choice == "4":
+            from talo.providers.resolver import ConnectionResolver
+            resolver = ConnectionResolver(config, store)
+            render.console.print("\n[bold]연결 상태 검증 중...[/bold]")
+            for c in config.connections.values():
+                ok, msg = asyncio.run(resolver.validate(c))
+                mark = "green" if ok else "red"
+                status = "정상 ●" if ok else "실패 ✗"
+                render.console.print(f"  [{mark}]{c.connection_id}[/{mark}]: {status} ({msg})")
+        elif choice == "5":
+            if not conns:
+                render.console.print("[yellow]해제할 연결이 없습니다.[/yellow]")
+                continue
+            delete_rows = [
+                (str(i), c.connection_id, c.model_id or "모델 없음")
+                for i, c in enumerate(conns, 1)
+            ] + [("0", "취소", "연결을 삭제하지 않습니다")]
+            try:
+                del_raw = _choose_menu("삭제할 연결", delete_rows,
+                                       f"삭제 번호 (1~{len(conns)}, 0=취소): ", "0")
+                if del_raw and del_raw != "0":
+                    del_idx = int(del_raw) - 1
+                    if 0 <= del_idx < len(conns):
+                        target_id = conns[del_idx].connection_id
+                        config.remove_connection(target_id)
+                        render.console.print(f"[green]연결 해제됨: {target_id}[/green]")
+            except (ValueError, KeyboardInterrupt, EOFError):
+                pass

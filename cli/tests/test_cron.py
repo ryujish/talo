@@ -55,7 +55,8 @@ def _make_job(repo: Repository, project_id: str = "proj_a", name: str = "daily",
 def test_migration_v2_scheduled_tables(repo):
     row = repo.conn.execute(
         "SELECT version FROM schema_migrations ORDER BY version DESC").fetchone()
-    assert row["version"] == 3
+    from talo.storage.db import MIGRATIONS
+    assert row["version"] == len(MIGRATIONS)
     tables = {r["name"] for r in repo.conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"scheduled_jobs", "scheduled_runs", "approval_requests"} <= tables

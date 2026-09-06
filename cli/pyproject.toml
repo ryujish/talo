@@ -1,6 +1,6 @@
 [project]
 name = "talo-cli"
-version = "0.1.0"
+version = "0.2.0"
 description = "Talo - 여러 AI와 함께 작업을 이어가는 개발자 CLI 에이전트"
 requires-python = ">=3.12"
 license = { text = "Proprietary" }

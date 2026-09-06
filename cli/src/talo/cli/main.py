@@ -25,6 +25,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"talo {__import__('talo').__version__}")
     sub = parser.add_subparsers(dest="command")
 
+    p_remote = sub.add_parser("remote", help="선택형 서버 동기화·원격 작업")
+    p_remote.add_argument("remote_action", choices=["pair", "start", "status", "disconnect", "install", "uninstall"])
+    p_remote.add_argument("--server", default="https://think-along.ai.kr")
+    p_remote.add_argument("--name", default=None)
+    p_remote.add_argument("--sync-records", action="store_true", help="대화·결정·작업 기록을 서버에 저장")
+    p_remote.add_argument("--allow-run", action="store_true", help="이 프로젝트의 원격 실행 허용")
+    p_remote.add_argument("--share-diff", action="store_true", help="검토할 diff의 서버 전달·저장 허용")
+
     p_run = sub.add_parser("run", help="한 작업 수행 후 종료")
     p_run.add_argument("request", help="요청 내용")
     p_run.add_argument("--plan", action="store_true", help="계획 모드로 수행")
@@ -46,6 +54,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_connect.add_argument("--api-key-env", default=None)
     p_connect.add_argument("--keychain", action="store_true", help="API 키를 macOS Keychain에 저장")
 
+    p_changes = sub.add_parser("changes", help="변경 목록·검토·적용·복구")
+    p_changes.add_argument("action", choices=["list", "diff", "review", "apply", "cancel", "recover"], nargs="?", default="list")
+    p_changes.add_argument("change_id", nargs="?")
+    p_changes.add_argument("--hash", dest="patch_hash")
+    p_changes.add_argument("--json", action="store_true")
+    p_undo = sub.add_parser("undo", help="마지막 Talo 변경만 되돌리기")
+    p_undo.add_argument("change_id", nargs="?")
+    p_undo.add_argument("--json", action="store_true")
+    p_tasks = sub.add_parser("tasks", help="열린 작업·완료 확인")
+    p_tasks.add_argument("action", choices=["list", "done"], nargs="?", default="list")
+    p_tasks.add_argument("task_id", nargs="?")
+    p_tasks.add_argument("--evidence", default="")
+    sub.add_parser("serve", help="Headless 코어 JSONL stdio 서비스")
+    sub.add_parser("demo", help="AI 연결 없는 변경 검토·undo 체험")
     sub.add_parser("setup", help="AI 연결 및 기본 모델 대화형 설정")
 
     p_model = sub.add_parser("model", help="기본 모델 선택 및 변경")
@@ -93,6 +115,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_daily = sub.add_parser("daily", help="오늘 일일 일지 생성 (전날 미완료 이월)")
     p_daily.add_argument("--date", default=None, help="YYYY-MM-DD (기본: 오늘)")
+
+    p_mcp = sub.add_parser("mcp", help="MCP HTTP/stdio 연결 확인")
+    p_mcp.add_argument("action", choices=["think-along", "http", "stdio"])
+    p_mcp.add_argument("target", nargs="?", help="HTTP URL 또는 stdio 실행 명령")
+    p_mcp.add_argument("args", nargs="*", help="stdio 명령 인자")
+    p_mcp.add_argument("--token-env", default=None, help="Bearer 토큰 환경변수 이름")
+
+    p_orca = sub.add_parser("orchestrate", help="Orca 작업을 기존 Talo 터미널에 직접 주입")
+    p_orca.add_argument("task_id", help="Orca task ID")
+    p_orca.add_argument("terminal", help="대상 Talo terminal handle")
+    p_orca.add_argument("--run", default=None, help="Orca run ID")
+    p_orca.add_argument("--from-terminal", default=None, help="coordinator terminal handle")
 
     sub.add_parser("doctor", help="인증·모델 연결·도구·설정 진단")
     return parser
@@ -185,13 +219,49 @@ def auto_connect_from_env(config: Config) -> bool:
 
 
 def main(argv: list[str] | None = None) -> int:
-    load_dotenv_files()
-    config = Config.load()
-    auto_connect_from_env(config)
-
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.command in {None, "run", "resume", "connect", "setup", "model", "doctor"}:
+        load_dotenv_files()
+        config = Config.load()
+        auto_connect_from_env(config)
 
+    if args.command in {"changes", "undo", "tasks"}:
+        from talo.application.service import create_app_context
+        from talo.cli.changes import show_changes
+        ctx = create_app_context()
+        try:
+            if args.command == "tasks":
+                from talo.continuity import tasks, finish_task
+                from talo.cli.render import console
+                if args.action == "done":
+                    finish_task(ctx.repository, ctx.workspace_id, args.task_id, args.evidence)
+                for task in tasks(ctx.repository, ctx.workspace_id):
+                    console.print(f"{task['id']} [{task['status']}] {task['title']}", markup=False)
+                return 0
+            return show_changes(ctx, "undo" if args.command == "undo" else args.action,
+                                args.change_id, patch_hash=getattr(args, "patch_hash", None), json_out=args.json)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        finally:
+            ctx.close()
+    if args.command == "remote":
+        load_dotenv_files()
+        from talo.remote import command
+        try:
+            return command(args)
+        except (ValueError, OSError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        except KeyboardInterrupt:
+            return 130
+
+    if args.command == "serve":
+        from talo.service import serve
+        return serve()
+    if args.command == "demo":
+        return _cmd_demo()
     if args.command == "run":
         return asyncio.run(_cmd_run(args))
     if args.command == "resume":
@@ -208,6 +278,10 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_inbox(args)
     if args.command == "daily":
         return _cmd_daily(args)
+    if args.command == "mcp":
+        return asyncio.run(_cmd_mcp(args))
+    if args.command == "orchestrate":
+        return asyncio.run(_cmd_orchestrate(args))
     if args.command == "doctor":
         return _cmd_doctor()
     return asyncio.run(_cmd_interactive())
@@ -250,7 +324,7 @@ async def _cmd_run(args: argparse.Namespace) -> int:
                 # 본문은 message.delta 이벤트로 이미 스트리밍됐으므로 중복 출력하지 않는다.
                 console.print("[green]완료[/green]")
             elif outcome.state.value in ("awaiting_approval",):
-                console.print("[yellow]승인 필요 상태로 종료했습니다.[/yellow]")
+                console.print(outcome.summary, markup=False, style="yellow")
             else:
                 console.print(f"[red]{outcome.summary}[/red]")
         return int(outcome.exit_code)
@@ -298,6 +372,8 @@ async def _cmd_resume(args: argparse.Namespace) -> int:
         session_id = chosen["id"]
         render.console.print(f"[green]세션 재개: {session_id} — {chosen['title'] or '(제목 없음)'}[/green]")
         _show_incomplete(ctx, session_id)
+        from talo.cli.changes import show_resume
+        show_resume(ctx, session_id)
         from talo.cli.interactive import run_interactive
         return await run_interactive(ctx, session_id=session_id)
     finally:
@@ -426,6 +502,52 @@ async def _validate_async(conn: ConnectionConfig, resolver: Any) -> tuple[bool, 
     if conn.provider_id == "mock":
         return True, "mock 연결은 항상 유효함"
     return await resolver.validate(conn)
+
+
+async def _cmd_mcp(args: argparse.Namespace) -> int:
+    from talo.cli import render
+    from talo.integrations.mcp import McpManager
+
+    manager = McpManager()
+    try:
+        if args.action == "think-along":
+            connection = await manager.connect_http(
+                "think_along", "https://mcp.flowpulse.ai.kr/mcp", "THINK_ALONG_OAUTH_KEY",
+            )
+        elif args.action == "http":
+            if not args.target:
+                render.console.print("[red]HTTP MCP URL이 필요합니다.[/red]")
+                return int(ExitCode.INPUT_ERROR)
+            connection = await manager.connect_http("http", args.target, args.token_env)
+        else:
+            if not args.target:
+                render.console.print("[red]stdio MCP 실행 명령이 필요합니다.[/red]")
+                return int(ExitCode.INPUT_ERROR)
+            connection = await manager.connect_stdio("stdio", args.target, args.args)
+        color = "green" if connection.status == "connected" else "red"
+        render.console.print(f"[{color}]{connection.connection_id}: {connection.status}[/{color}]")
+        if connection.error:
+            render.console.print(f"[red]{connection.error}[/red]")
+        for tool in connection.tools:
+            render.console.print(f"  {tool.get('name', '-')}: {tool.get('description', '')}")
+        return int(ExitCode.COMPLETED if connection.status == "connected" else ExitCode.EXTERNAL_PAUSED)
+    finally:
+        await manager.aclose()
+
+
+async def _cmd_orchestrate(args: argparse.Namespace) -> int:
+    from talo.cli import render
+    from talo.integrations.orca import dispatch_to_talo
+
+    try:
+        dispatch = await dispatch_to_talo(
+            args.task_id, args.terminal, run_id=args.run, coordinator=args.from_terminal,
+        )
+    except Exception as exc:  # noqa: BLE001
+        render.console.print(f"[red]Orca 주입 실패: {exc}[/red]")
+        return int(ExitCode.EXTERNAL_PAUSED)
+    render.console.print(f"[green]Orca 작업 주입 완료: {dispatch['id']}[/green]")
+    return int(ExitCode.COMPLETED)
 
 
 CLI_BRIDGE_PRESETS: dict[str, dict[str, str]] = {
@@ -631,10 +753,45 @@ async def _cmd_interactive() -> int:
         active = ctx.resolver.active()
         if (active is None or not ctx.config.connections) and sys.stdin.isatty():
             run_first_time_guide(ctx.config, ctx.resolver.credentials_store)
-        session_id = start_session(ctx)
+        sessions = ctx.repository.list_sessions(ctx.workspace_id)
+        session_id = sessions[0]["id"] if sessions else start_session(ctx)
+        from talo.cli.changes import show_resume
+        show_resume(ctx, session_id)
         return await run_interactive(ctx, session_id=session_id)
     finally:
         ctx.close()
+
+
+def _cmd_demo():
+    import tempfile
+    from talo.application.service import create_app_context
+    from talo.changes.manager import for_context
+    from talo.cli.changes import print_diff
+    from talo.cli.render import console
+    with tempfile.TemporaryDirectory(prefix="talo-demo-") as directory:
+        root = Path(directory)
+        (root / "hello.txt").write_text("안녕하세요, Talo\n")
+        # 임시 설정·상태를 사용하므로 실제 프로젝트와 자격증명을 변경하지 않는다.
+        import os
+        old = os.environ.get("TALO_HOME")
+        os.environ["TALO_HOME"] = str(root / "state")
+        ctx = create_app_context(root)
+        try:
+            manager = for_context(ctx)
+            c = manager.propose([{"path": "hello.txt", "content": "다음 날에도 이어서 작업합니다.\n"}])
+            print_diff(manager.diff(c["id"]))
+            console.print("체험: 임시 프로젝트에 변경을 적용하고 즉시 undo합니다.")
+            manager.apply(c["id"], c["patch_hash"])
+            manager.undo(c["id"])
+            assert (root / "hello.txt").read_text() == "안녕하세요, Talo\n"
+            console.print("체험 완료: 제안 → diff → 적용 → undo → 원문 복구 확인")
+            return 0
+        finally:
+            ctx.close()
+            if old is None:
+                os.environ.pop("TALO_HOME", None)
+            else:
+                os.environ["TALO_HOME"] = old
 
 
 if __name__ == "__main__":

@@ -83,7 +83,8 @@ class Repository:
 
     def touch_session(self, session_id: str, **fields: Any) -> None:
         sets = ", ".join(f"{k}=?" for k in fields)
-        self.conn.execute(f"UPDATE sessions SET {sets}, updated_at=? WHERE id=?", (*fields.values(), _now(), session_id))
+        prefix = (sets + ", ") if sets else ""
+        self.conn.execute(f"UPDATE sessions SET {prefix}updated_at=? WHERE id=?", (*fields.values(), _now(), session_id))
         self.conn.commit()
 
     # -- runs ---------------------------------------------------------------

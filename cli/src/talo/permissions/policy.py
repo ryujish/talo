@@ -86,17 +86,6 @@ class PermissionPolicy:
         if effect is None:
             return Decision(False, f"등록되지 않은 도구: {tool_name}")
 
-        # 저장된 허용 범위 먼저 확인 (이미 부여된 허용은 해당 범위에서 유지)
-        for grant in self.grants:
-            if grant.matches(tool_name, scope, self.project_root):
-                return Decision(True, "저장된 허용 범위", scope=scope)
-
-        # 읽기 전용 프로필: 읽기는 허용, 변경/실행은 추가 확인
-        if self.profile == PermissionProfile.READ_ONLY:
-            if effect == ToolEffect.READ:
-                return Decision(True, "읽기 전용 프로필의 읽기 허용", scope=scope)
-            return Decision(False, "읽기 전용 프로필에서는 변경·실행 불가", requires_approval=True, scope=scope)
-
         # 계획 모드: 변경 수반 실행 금지. 기획 문서 저장만 document_write로 허용.
         if self.mode == WorkMode.PLAN:
             if effect == ToolEffect.READ:
@@ -104,6 +93,17 @@ class PermissionPolicy:
             if tool_name == "document_write" and self.profile != PermissionProfile.READ_ONLY:
                 return Decision(True, "요청된 기획 문서 저장 범위", scope=scope)
             return Decision(False, "계획 모드에서는 변경·실행을 수행하지 않음", scope=scope)
+
+        # 읽기 전용 프로필: 읽기는 허용, 변경/실행은 추가 확인
+        if self.profile == PermissionProfile.READ_ONLY:
+            if effect == ToolEffect.READ:
+                return Decision(True, "읽기 전용 프로필의 읽기 허용", scope=scope)
+            return Decision(False, "읽기 전용 프로필에서는 변경·실행 불가", requires_approval=True, scope=scope)
+
+        # 저장된 허용 범위 먼저 확인 (이미 부여된 허용은 해당 범위에서 유지)
+        for grant in self.grants:
+            if grant.matches(tool_name, scope, self.project_root):
+                return Decision(True, "저장된 허용 범위", scope=scope)
 
         # 확정된 기억은 이후 모든 모델의 컨텍스트에 주입되므로 사람 검토 없이 바꾸지 않는다.
         if tool_name in {"memory_confirm", "memory_update", "memory_retire"}:

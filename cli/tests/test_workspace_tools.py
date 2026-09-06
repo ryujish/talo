@@ -91,6 +91,9 @@ def test_file_read_and_patch(git_repo):
     result = asyncio.run(builtin.file_read(ctx, "a.txt"))
     assert result["ok"] and "hello" in result["content"]
 
+    async def approve(tool, scope):
+        return True
+    ctx.on_change_review = approve
     h = result["hash"]
     patched = asyncio.run(builtin.file_patch(ctx, "a.txt", "hello", "hi", expected_hash=h))
     assert patched["ok"]
@@ -116,6 +119,9 @@ def test_document_write(git_repo):
 
     ctx = ToolContext(repo_root=git_repo, workdir=git_repo, project_id="p", session_id="s",
                       run_id="r", artifacts_dir=git_repo / ".art")
+    async def approve(tool, scope):
+        return True
+    ctx.on_change_review = approve
     result = asyncio.run(builtin.document_write(ctx, "docs/plan.md", "# 계획"))
     assert result["ok"]
     assert (git_repo / "docs" / "plan.md").exists()

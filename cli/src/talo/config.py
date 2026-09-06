@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import tomllib
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -134,44 +135,73 @@ class Config:
 
     # -- 저장 ---------------------------------------------------------------
     def save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(_to_toml(self._data), encoding="utf-8")
-        os.replace(tmp, self.path)
+        snapshot = dict(self._data)
+        def mutate(data: dict[str, Any]) -> None:
+            connections = dict(data.get("connections", {}) or {})
+            connections.update(snapshot.get("connections", {}) or {})
+            data.update({key: value for key, value in snapshot.items() if key != "connections"})
+            data["connections"] = connections
+        self._locked_update(mutate)
 
     def update(self, **kwargs: Any) -> None:
-        self._data.update(kwargs)
-        self.save()
+        self._locked_update(lambda data: data.update(kwargs))
 
     def set_connection(self, conn: ConnectionConfig) -> None:
-        conns = dict(self._data.get("connections", {}) or {})
-        conns[conn.connection_id] = conn.to_dict()
-        self._data["connections"] = conns
-        self.save()
+        def mutate(data: dict[str, Any]) -> None:
+            conns = dict(data.get("connections", {}) or {})
+            conns[conn.connection_id] = conn.to_dict()
+            data["connections"] = conns
+        self._locked_update(mutate)
 
     def set_default_model(self, target: str | None) -> None:
-        self._data["default_model"] = target
-        self.save()
+        self._locked_update(lambda data: data.update(default_model=target))
 
     def remove_connection(self, connection_id: str) -> None:
-        conns = dict(self._data.get("connections", {}) or {})
-        conns.pop(connection_id, None)
-        self._data["connections"] = conns
-        if self.default_model and self.default_model.startswith(f"{connection_id}:"):
-            self._data["default_model"] = None
-        self.save()
+        def mutate(data: dict[str, Any]) -> None:
+            conns = dict(data.get("connections", {}) or {})
+            conns.pop(connection_id, None)
+            data["connections"] = conns
+            if str(data.get("default_model") or "").startswith(f"{connection_id}:"):
+                data["default_model"] = None
+        self._locked_update(mutate)
+
+    def _locked_update(self, mutate: Any) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = self.path.with_suffix(self.path.suffix + ".lock")
+        with _file_lock(lock_path):
+            latest = self._read(self.path)
+            data = dict(DEFAULT_CONFIG)
+            data.update(latest)
+            mutate(data)
+            tmp = self.path.with_name(f".{self.path.name}.{os.getpid()}.tmp")
+            tmp.write_text(_to_toml(data), encoding="utf-8")
+            os.replace(tmp, self.path)
+            self._data = data
 
     @classmethod
     def load(cls, path: Path | None = None) -> "Config":
         p = path or config_path()
-        if p.exists():
-            try:
-                with p.open("rb") as fh:
-                    data = tomllib.load(fh)
-                return cls(data, path=p)
-            except (tomllib.TOMLDecodeError, OSError):
-                return cls({}, path=p)
-        return cls({}, path=p)
+        return cls(cls._read(p), path=p)
+
+    @staticmethod
+    def _read(path: Path) -> dict[str, Any]:
+        try:
+            with path.open("rb") as fh:
+                return tomllib.load(fh)
+        except (FileNotFoundError, tomllib.TOMLDecodeError, OSError):
+            return {}
+
+
+@contextmanager
+def _file_lock(path: Path):
+    import fcntl
+
+    with path.open("a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
 
 
 def _to_toml(data: dict[str, Any]) -> str:

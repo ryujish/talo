@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from talo.cli.connection_wizard import (
     SERVICE_PRESETS,
     _finalize_connection,
@@ -154,6 +156,20 @@ def test_model_picker_switching(tmp_path):
         picked = run_model_picker(cfg)
         assert picked == "openai_1:gpt-4.1-mini"
         assert cfg.default_model == "openai_1:gpt-4.1-mini"
+
+
+def test_concurrent_config_instances_merge_connections(tmp_path):
+    path = tmp_path / "config.toml"
+    first = Config(path=path)
+    second = Config(path=path)
+
+    first.set_connection(ConnectionConfig("agy_cli", "agy", model_id="gemini-3.8-flash-high"))
+    second.set_connection(ConnectionConfig("opencode_cli", "opencode", model_id="opencode/big-pickle"))
+    second.set_default_model("opencode_cli:opencode/big-pickle")
+
+    saved = Config.load(path)
+    assert set(saved.connections) == {"agy_cli", "opencode_cli"}
+    assert saved.default_model == "opencode_cli:opencode/big-pickle"
 
 
 def test_model_picker_main_categories_are_fixed(tmp_path):
@@ -327,3 +343,118 @@ def test_cli_bridge_drains_stderr_before_wait(tmp_path):
         )
 
     assert response.message.text == "OK"
+
+
+def test_cli_bridge_cancellation_terminates_process(tmp_path):
+    conn = ConnectionConfig(
+        "opencode_cli", "opencode", protocol="cli_subprocess",
+        model_id="opencode/big-pickle", command="opencode", cwd=str(tmp_path),
+    )
+
+    class BlockingStream:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            await asyncio.Future()
+
+    class Process:
+        returncode = None
+        stdout = BlockingStream()
+        stderr = BlockingStream()
+        terminated = False
+
+        def terminate(self):
+            self.terminated = True
+            self.returncode = -15
+
+        def kill(self):
+            self.returncode = -9
+
+        async def wait(self):
+            return self.returncode
+
+    process = Process()
+
+    async def spawn(*_args, **_kwargs):
+        return process
+
+    async def run():
+        with patch("asyncio.create_subprocess_exec", new=spawn):
+            task = asyncio.create_task(
+                CliSubprocessAdapter(conn).complete([{"role": "user", "content": "test"}])
+            )
+            await asyncio.sleep(0)
+            task.cancel()
+    asyncio.run(run())
+    assert process.terminated
+
+
+def test_choose_menu_esc_cancels():
+    from talo.cli.connection_wizard import _choose_menu
+
+    rows = [("1", "First", "First option"), ("0", "취소", "돌아갑니다")]
+    with patch("builtins.input", return_value="esc"):
+        res = _choose_menu("테스트", rows, "선택: ")
+    assert res == "0"
+
+
+def test_model_picker_esc_goes_back_to_category(tmp_path):
+    cfg = Config(path=tmp_path / "config.toml")
+    conn = ConnectionConfig("deepseek_1", "deepseek", model_id="deepseek-chat")
+    cfg.set_connection(conn)
+
+    # 1st input: "3" (DeepSeek category)
+    # 2nd input: "esc" (goes back to category menu!)
+    # 3rd input: "esc" (exits model picker!)
+    with patch("builtins.input", side_effect=["3", "esc", "esc"]):
+        picked = run_model_picker(cfg)
+
+    assert picked is None
+
+
+def test_skills_run_and_info_interactive(tmp_path):
+    from unittest.mock import MagicMock
+    from talo.cli.interactive import _handle_slash_interactive
+    from talo.skills.loader import SkillLoader
+
+    ctx = MagicMock()
+    ctx.skill_loader = SkillLoader(tmp_path, None)
+
+    # 1. /skills info fix_error
+    res_info = _handle_slash_interactive(ctx, "ses_test", "/skills info fix_error")
+    assert res_info is None
+
+    # 2. /skills run fix_error
+    res_run = _handle_slash_interactive(ctx, "ses_test", "/skills run fix_error")
+    assert isinstance(res_run, dict)
+    assert "run_request" in res_run
+    assert "fix_error" in res_run["run_request"]
+
+
+def test_choose_menu_cancel_key_with_agent_keyword():
+    from talo.cli.connection_wizard import _choose_menu
+
+    # Korean "에이전트" contains "이전" as a substring.
+    # It must NOT be treated as a cancel row!
+    rows = [
+        ("hermes-agent", "hermes-agent", "Hermes 에이전트 확장 및 오케스트레이션"),
+        ("0", "취소", "이전으로 돌아갑니다"),
+    ]
+    with patch("builtins.input", return_value="esc"):
+        res = _choose_menu("스킬 선택", rows, "선택: ")
+    assert res == "0"
+
+
+def test_skills_pick_cancels(tmp_path):
+    from unittest.mock import MagicMock
+    from talo.cli.interactive import _handle_slash_interactive
+    from talo.skills.loader import SkillLoader
+
+    ctx = MagicMock()
+    ctx.skill_loader = SkillLoader(tmp_path, None)
+
+    with patch("builtins.input", return_value="0"):
+        res = _handle_slash_interactive(ctx, "ses_test", "/skills pick")
+    assert res is None
+

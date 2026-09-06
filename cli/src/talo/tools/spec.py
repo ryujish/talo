@@ -50,6 +50,8 @@ class ToolContext:
     large_output_threshold: int = 16_000
     exclude_paths: list[str] = field(default_factory=list)
     workspace: Any = None
+    workspace_id: str = ""
+    on_change_review: Callable[[str, dict[str, Any]], Awaitable[bool | str]] | None = None
 
     def is_path_allowed(self, path: Path) -> bool:
         try:

@@ -22,6 +22,7 @@ export type ProviderConnection = {
   credentialRef: string;
   status: ConnectionStatus;
   models: ModelCapability[];
+  isDefault?: boolean;
   lastErrorCode?: string;
   lastCheckedAt?: string;
 };

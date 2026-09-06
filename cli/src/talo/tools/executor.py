@@ -91,7 +91,7 @@ class ToolExecutor:
             op_id = self.repository.record_operation(ctx.run_id, call_id, tool_name, ih, "prepared", started_at=started)
         try:
             result = await tool.handler(ctx, **arguments)
-            status = "success" if result.get("ok", True) else "error"
+            status = "review_required" if result.get("review_required") else ("success" if result.get("ok", True) else "error")
             error = None if status == "success" else result.get("error", "도구 실행 실패")
             if self.repository is not None and op_id:
                 self.repository.update_operation(op_id, "succeeded" if status == "success" else "failed",

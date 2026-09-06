@@ -19,11 +19,15 @@ COMMANDS_HELP = {
     "/plan": ("계획 모드", "파일을 바꾸지 않고 분석과 계획만 수행합니다"),
     "/dev": ("개발 모드", "허용된 범위에서 코드를 수정하고 검증합니다"),
     "/status": ("작업 상태", "최근 실행과 검증 결과를 확인합니다"),
-    "/diff": ("변경 내용", "현재 Git 변경 요약을 확인합니다"),
+    "/diff": ("변경 내용", "이번 Talo 변경의 실제 diff를 확인합니다"),
+    "/undo": ("변경 복구", "마지막 Talo 변경만 되돌립니다"),
+    "/review": ("변경 검토", "대기 중인 변경을 검토하고 적용합니다"),
+    "/tasks": ("남은 작업", "프로젝트 미완료 작업을 확인합니다"),
+    "/new": ("새 세션", "현재 기록을 보존하고 새 세션을 시작합니다"),
     "/memory": ("기억 관리", "프로젝트 기억을 조회·추가·확정·삭제합니다"),
     "/sessions": ("세션 목록", "저장된 작업 세션을 확인합니다"),
     "/permissions": ("권한 설정", "현재 작업 방식과 권한을 확인합니다"),
-    "/skills": ("스킬 목록", "사용 가능한 스킬과 설명을 확인합니다"),
+    "/skills": ("스킬 관리", "스킬 목록·실행(/skills run)·상세 정보 확인"),
     "/mcp": ("MCP 연결", "등록된 MCP 도구 연결 상태를 확인합니다"),
     "/export": ("내보내기", "세션 인계 자료를 Markdown 또는 JSON으로 저장합니다"),
     "/quit": ("종료", "Talo 대화형 세션을 종료합니다"),
@@ -61,7 +65,15 @@ async def run_interactive(ctx: Any, session_id: str) -> int:
             if not line or line.startswith("#"):
                 continue
             if line.startswith("/"):
-                _handle_slash_print(ctx, session_id, line)
+                changed = _handle_slash_interactive(
+                    ctx, session_id, line, active_mode=mode, active_permission=permission
+                )
+                if changed == "quit":
+                    return int(ExitCode.COMPLETED)
+                if isinstance(changed, dict):
+                    mode = changed.get("mode", mode)
+                    permission = changed.get("permission", permission)
+                    session_id = changed.get("session_id", session_id)
                 continue
             outcome = await run_request(ctx, line, session_id=session_id, mode=mode, permission=permission,
                                         on_human=render.print_event)
@@ -108,6 +120,22 @@ async def run_interactive(ctx: Any, session_id: str) -> int:
     )
 
     ctrl_c_armed = False
+
+    async def handle_slash(text: str) -> Any:
+        if text.strip() == "/model":
+            from talo.cli.connection_wizard import run_model_picker
+
+            picked = await asyncio.to_thread(run_model_picker, ctx.config)
+            return {"model": picked} if picked else None
+        return await asyncio.to_thread(
+            _handle_slash_interactive,
+            ctx,
+            session_id,
+            text,
+            active_mode=mode,
+            active_permission=permission,
+        )
+
     while True:
         try:
             text = await session_prompt.prompt_async()
@@ -126,10 +154,23 @@ async def run_interactive(ctx: Any, session_id: str) -> int:
         if not text:
             continue
         if text.startswith("/"):
-            changed = _handle_slash_interactive(ctx, session_id, text)
+            changed = await handle_slash(text)
             if changed == "quit":
                 return int(ExitCode.COMPLETED)
             if changed and isinstance(changed, dict):
+                if "session_id" in changed:
+                    session_id = changed["session_id"]
+                if "run_request" in changed:
+                    outcome = await run_request(
+                        ctx,
+                        changed["run_request"],
+                        session_id=session_id,
+                        mode=mode,
+                        permission=permission,
+                        on_human=render.print_event,
+                    )
+                    _print_outcome(outcome)
+                    continue
                 if "mode" in changed:
                     mode = changed["mode"]
                 if "permission" in changed:
@@ -144,7 +185,7 @@ async def run_interactive(ctx: Any, session_id: str) -> int:
         # 자연어 요청 → 같은 기능 접근 가능
         lowered = text.lower()
         if "모델 바꿔" in text or lowered == "model":
-            _handle_slash_interactive(ctx, session_id, "/model")
+            await handle_slash("/model")
             continue
         if "변경 내용" in text or lowered == "diff":
             _handle_slash_interactive(ctx, session_id, "/diff")
@@ -167,6 +208,18 @@ async def run_interactive(ctx: Any, session_id: str) -> int:
 async def _approval_prompt(session_prompt: Any, tool: str, scope: dict[str, Any]) -> bool:
     from talo.cli import render
 
+    if tool == "change_review":
+        from talo.cli.changes import print_diff
+        render.console.print(f"변경 검토 · {scope['change_id']} · {scope.get('match_method', 'exact')}", markup=False)
+        print_diff(scope["diff"])
+        try:
+            answer = (await session_prompt.prompt_async("적용 [a] / 수정 요청 [e] / 취소 [Enter]: ")).strip().lower()
+            if answer == "e":
+                feedback = (await session_prompt.prompt_async("수정할 내용: ")).strip()
+                return feedback or False
+            return answer == "a"
+        except (EOFError, KeyboardInterrupt):
+            return False
     render.console.print(f"[yellow]승인 요청: {tool}[/yellow]")
     render.console.print(f"  실행 내용: {json.dumps(scope, ensure_ascii=False)[:200]}")
     render.menu_table("승인 선택", [
@@ -188,7 +241,7 @@ def _print_outcome(outcome: Any) -> None:
         # 본문은 message.delta 이벤트로 이미 스트리밍됐으므로 중복 출력하지 않는다.
         render.console.print("[green]완료[/green]")
     elif outcome.exit_code == ExitCode.APPROVAL_NEEDED:
-        render.console.print("[yellow]승인 필요 상태로 종료했습니다.[/yellow]")
+        render.console.print(outcome.summary, markup=False, style="yellow")
     else:
         render.console.print(f"[red]{outcome.summary[:200]}[/red]")
 
@@ -202,7 +255,14 @@ def _handle_slash_print(ctx: Any, session_id: str, text: str) -> None:
         render.console.print(result["output"])
 
 
-def _handle_slash_interactive(ctx: Any, session_id: str, text: str) -> Any:
+def _handle_slash_interactive(
+    ctx: Any,
+    session_id: str,
+    text: str,
+    *,
+    active_mode: str | None = None,
+    active_permission: str | None = None,
+) -> Any:
     from talo.application.service import export_session, list_sessions, memory_store, start_session
     from talo.cli import render
 
@@ -226,7 +286,9 @@ def _handle_slash_interactive(ctx: Any, session_id: str, text: str) -> Any:
         render.console.print("[green]개발 모드로 전환했습니다.[/green]")
         return {"mode": "dev"}
     if cmd == "/permissions":
-        render.console.print(f"작업 방식: {ctx.config.default_mode} · 권한: {ctx.config.default_permission}")
+        current_mode = active_mode or ctx.config.default_mode
+        current_permission = active_permission or ctx.config.default_permission
+        render.console.print(f"현재 작업 방식: {current_mode} · 권한: {current_permission}")
         render.console.print("권한 변경은 /plan, /dev 또는 `talo run --permission`을 사용하세요.")
         return None
     if cmd == "/model":
@@ -254,20 +316,32 @@ def _handle_slash_interactive(ctx: Any, session_id: str, text: str) -> Any:
         render.console.print(f"[yellow]알 수 없는 모델 번호/ID: {arg}[/yellow]")
         return None
     if cmd == "/status":
+        current_mode = active_mode or ctx.config.default_mode
+        current_permission = active_permission or ctx.config.default_permission
+        render.console.print(f"현재 작업 방식: {current_mode} · 권한: {current_permission}")
         runs = ctx.repository.list_runs(session_id)
         if not runs:
             render.console.print("이 세션의 실행 기록이 없습니다.")
             return None
         last = runs[-1]
-        render.console.print(f"마지막 Run: {last['id']} · 상태: {last['state']} · 방식: {last['mode']}")
+        render.console.print(
+            f"마지막 Run: {last['id']} · 상태: {last['state']} · 당시 방식: {last['mode']}"
+        )
         verifs = ctx.repository.conn.execute(
             "SELECT * FROM verifications WHERE run_id=? ORDER BY created_at", (last["id"],)
         ).fetchall()
         for v in verifs:
             render.console.print(f"  검증: [{v['result']}] {v['evidence_ref'] or ''}")
         return None
-    if cmd == "/diff":
-        render.console.print(ctx.workspace.diff_stat() or "(변경 없음)")
+    if cmd in {"/diff", "/review", "/undo"}:
+        from talo.cli.changes import show_changes
+        show_changes(ctx, {"/diff": "diff", "/review": "review", "/undo": "undo"}[cmd], arg or None)
+        return None
+    if cmd == "/new":
+        return {"session_id": start_session(ctx)}
+    if cmd == "/tasks":
+        from talo.cli.changes import show_resume
+        show_resume(ctx, session_id)
         return None
     if cmd == "/memory":
         store = memory_store(ctx)
@@ -288,13 +362,68 @@ def _handle_slash_interactive(ctx: Any, session_id: str, text: str) -> Any:
         render.sessions_table(list_sessions(ctx))
         return None
     if cmd == "/skills":
+        clean_arg = arg.strip()
+        is_ko = getattr(ctx.skill_loader, "lang", "ko") == "ko"
+        if clean_arg.startswith("run "):
+            skill_name = clean_arg[4:].strip()
+            skill = ctx.skill_loader.load_skill(skill_name)
+            if not skill:
+                render.console.print(f"[red]{'스킬을 찾을 수 없습니다' if is_ko else 'Skill not found'}: {skill_name}[/red]")
+                return None
+            render.console.print(f"\n[bold green]{'▶ 스킬 실행 시작' if is_ko else '▶ Starting skill'}:[/bold green] [bold]{skill['title']}[/bold] ({skill['name']})")
+            render.console.print(f"[dim]{skill['description']}[/dim]\n")
+            return {"run_request": f"스킬 '{skill['title']}'({skill['name']}) 절차에 따라 작업을 수행해줘.\n\n{skill['body']}"}
+
+        if clean_arg.startswith("info ") or clean_arg.startswith("view "):
+            skill_name = clean_arg.split(maxsplit=1)[1].strip()
+            skill = ctx.skill_loader.load_skill(skill_name)
+            if not skill:
+                render.console.print(f"[red]{'스킬을 찾을 수 없습니다' if is_ko else 'Skill not found'}: {skill_name}[/red]")
+                return None
+            from rich.markdown import Markdown
+            render.console.print(f"\n[bold cyan]{skill['title']}[/bold cyan] ({skill['name']}) [dim][{skill['origin']}][/dim]")
+            render.console.print(f"[bold]{'설명' if is_ko else 'Description'}:[/bold] {skill['description']}")
+            if skill.get("goal"):
+                render.console.print(f"[bold]{'목표' if is_ko else 'Goal'}:[/bold] {skill['goal']}")
+            if skill.get("steps"):
+                render.console.print(f"[bold]{'단계' if is_ko else 'Steps'}:[/bold] " + " → ".join(skill["steps"]))
+            if skill.get("tools"):
+                render.console.print(f"[bold]{'도구' if is_ko else 'Tools'}:[/bold] " + ", ".join(skill["tools"]))
+            render.console.print("\n" + "-" * 40)
+            render.console.print(Markdown(skill["body"]))
+            return None
+
+        if clean_arg in ("pick", "select", "menu"):
+            from talo.cli.connection_wizard import _choose_menu
+            skills = ctx.skill_loader.list_skills()
+            rows = [
+                (s["name"], s["name"], f"[{s['origin']}] {s['description']}")
+                for s in skills
+            ] + [("0", "취소" if is_ko else "Cancel", "이전으로 돌아갑니다" if is_ko else "Back")]
+            try:
+                picked = _choose_menu("스킬 선택" if is_ko else "Select Skill", rows, "\n선택 (0=취소): ", "0", cancel_key="0")
+                if picked and picked not in ("0", "cancel", "취소", "-1", "back"):
+                    picked_skill = ctx.skill_loader.load_skill(picked)
+                    title = picked_skill["title"] if picked_skill else picked
+                    body = picked_skill["body"] if picked_skill else ""
+                    return {"run_request": f"스킬 '{title}'({picked}) 절차에 따라 작업을 수행해줘.\n\n{body}"}
+            except (KeyboardInterrupt, EOFError):
+                pass
+            return None
+
         skills = ctx.skill_loader.list_skills()
         for s in skills:
-            render.console.print(f"  {s['name']} [{s['origin']}]: {s['description'][:80]}")
-        render.console.print("명시적 실행은 /skills run <이름> 또는 자연어로 요청하세요.")
+            render.console.print(f"  {s['name']} [{s['origin']}]: {s['description']}")
+        if is_ko:
+            render.console.print("\n명시적 실행: /skills run <이름> | 상세 보기: /skills info <이름> | 선택 메뉴: /skills pick")
+        else:
+            render.console.print("\nRun: /skills run <name> | Details: /skills info <name> | Menu: /skills pick")
         return None
     if cmd == "/mcp":
-        render.console.print("등록된 MCP 연결이 없습니다. (초기 범위: 명시적으로 등록한 MCP 도구 연결)")
+        render.console.print("MCP 연결 확인:")
+        render.console.print("  talo mcp think-along")
+        render.console.print("  talo mcp http <URL> --token-env <환경변수>")
+        render.console.print("  talo mcp stdio <명령> [인자...]")
         return None
     if cmd == "/export":
         fmt = arg.strip() or "markdown"

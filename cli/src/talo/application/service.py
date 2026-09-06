@@ -186,7 +186,7 @@ def export_session(ctx: AppContext, session_id: str, fmt: str = "markdown") -> s
     return "\n".join(lines)
 
 
-async def run_request(ctx: AppContext, request: str, *, session_id: str, mode: str = "dev",
+async def _run_request(ctx: AppContext, request: str, *, session_id: str, mode: str = "dev",
                       permission: str = "project_edit", connection_id: str | None = None,
                       model_id: str | None = None, json_out: bool = False,
                       on_approval: Callable[[str, dict[str, Any]], Awaitable[bool]] | None = None,
@@ -213,3 +213,10 @@ async def run_request(ctx: AppContext, request: str, *, session_id: str, mode: s
 
 def memory_store(ctx: AppContext) -> MemoryStore:
     return MemoryStore(ctx.repository, ctx.project_id)
+
+
+async def run_request(ctx: AppContext, request: str, **kwargs) -> RunOutcome:
+    """동일 workspace의 모델 실행을 직렬화한다. 파일 적용 잠금과는 분리한다."""
+    from talo.workspace.repo import WriteLock
+    with WriteLock(paths.artifacts_dir(ctx.project_id) / (ctx.workspace_id + ".run.lock")):
+        return await _run_request(ctx, request, **kwargs)

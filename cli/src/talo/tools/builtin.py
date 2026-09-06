@@ -110,49 +110,69 @@ async def file_read(ctx: ToolContext, path: str, offset: int = 0, limit: int = 4
     }
 
 
+async def _submit_change(ctx: ToolContext, path: str, content: bytes | None,
+                         expected_hash: str | None, match_method: str = "exact") -> dict[str, Any]:
+    from talo.changes.manager import ChangeError, for_context
+    manager = for_context(ctx)
+    try:
+        change = manager.propose([{"path": path, "content": content, "expected_hash": expected_hash}],
+                                 run_id=ctx.run_id, session_id=ctx.session_id, match_method=match_method)
+        scope = {"change_id": change["id"], "patch_hash": change["patch_hash"],
+                 "revision": change["revision"], "diff": manager.diff(change["id"]),
+                 "match_method": match_method, "path": path}
+        if ctx.on_change_review is None:
+            return {"ok": False, "review_required": True, **scope,
+                    "error": "변경 검토 필요: talo changes review " + change["id"]}
+        decision = await ctx.on_change_review("change_review", scope)
+        if decision is not True:
+            manager.cancel(change["id"])
+            return {"ok": False, "code": "REVISION_REQUESTED" if isinstance(decision, str) else "CANCELLED",
+                    "error": decision if isinstance(decision, str) else "사용자가 변경을 취소했습니다",
+                    "change_id": change["id"]}
+        manager.apply(change["id"], change["patch_hash"])
+        f = change["manifest"]["files"][0]
+        return {"ok": True, "path": f["path"], "before_hash": f["before"], "after_hash": f["after"],
+                "change_id": change["id"], "checkpoint_id": change["id"]}
+    except ChangeError as exc:
+        return {"ok": exc.code == "NO_CHANGE", "code": exc.code, "error": str(exc)}
+
+
 async def file_patch(ctx: ToolContext, path: str, old_text: str, new_text: str,
                      expected_hash: str | None = None) -> dict[str, Any]:
-    """단일 파일 치환. 기대 해시 확인 후 원자적 교체."""
-    target = ctx.resolve_path(path)
-    if not target.is_file():
-        return {"ok": False, "error": f"파일이 아님: {path}"}
-    before_hash = hash_file(target)
-    if expected_hash and expected_hash != before_hash:
-        return {"ok": False, "error": "파일이 외부에서 변경됨(해시 불일치). 다시 읽은 뒤 적용해야 함.",
-                "current_hash": before_hash}
-    content = target.read_text(encoding="utf-8", errors="replace")
-    if old_text not in content:
-        return {"ok": False, "error": "치환 대상 텍스트를 찾지 못함. 파일이 변경되었을 수 있음."}
-    if content.count(old_text) > 1:
-        return {"ok": False, "error": "치환 대상이 여러 곳에서 발견됨. 더 긴 문맥을 지정해야 함."}
-    updated = content.replace(old_text, new_text, 1)
-    _atomic_write(target, updated)
-    return {"ok": True, "path": str(target.relative_to(ctx.repo_root)),
-            "before_hash": before_hash, "after_hash": hash_file(target)}
+    from talo.changes.manager import ChangeError, for_context, digest
+    from talo.changes.matcher import replacement
+    try:
+        manager = for_context(ctx)
+        target = manager.target(path)
+        before = manager.read(target)
+        if before is None:
+            raise ChangeError("NOT_FOUND", "수정할 파일이 없습니다")
+        h = digest(before)
+        if expected_hash is not None and expected_hash != h:
+            raise ChangeError("STALE_BASE", "파일 해시 불일치. 최신 파일을 다시 읽으세요")
+        updated, method = replacement(before.decode("utf-8"), old_text, new_text)
+        return await _submit_change(ctx, path, updated.encode("utf-8"), h, method)
+    except ChangeError as exc:
+        return {"ok": False, "code": exc.code, "error": str(exc), "retry_hint": "file_read 후 새 문맥으로 재생성"}
 
 
 async def file_write(ctx: ToolContext, path: str, content: str, expected_hash: str | None = None) -> dict[str, Any]:
-    target = ctx.resolve_path(path)
-    if target.exists():
-        before = hash_file(target)
-        if expected_hash and expected_hash != before:
-            return {"ok": False, "error": "파일이 외부에서 변경됨(해시 불일치)."}
-    else:
-        before = None
-    target.parent.mkdir(parents=True, exist_ok=True)
-    _atomic_write(target, content)
-    return {"ok": True, "path": str(target.relative_to(ctx.repo_root)),
-            "before_hash": before, "after_hash": hash_file(target)}
+    from talo.changes.manager import ChangeError, for_context, digest
+    try:
+        manager = for_context(ctx)
+        before = manager.read(manager.target(path))
+        h = digest(before) if before is not None else None
+        if expected_hash is not None and expected_hash != h:
+            raise ChangeError("STALE_BASE", "파일 해시 불일치")
+        return await _submit_change(ctx, path, content.encode("utf-8"), h)
+    except ChangeError as exc:
+        return {"ok": False, "code": exc.code, "error": str(exc)}
 
 
 async def document_write(ctx: ToolContext, path: str, content: str) -> dict[str, Any]:
-    """기획 문서 저장 전용. 계획 모드에서도 허용되는 문서 범위."""
-    target = ctx.resolve_path(path)
-    if not (target.suffix in {".md", ".txt"} or target.name.endswith(".md")):
+    if Path(path).suffix not in {".md", ".txt"}:
         return {"ok": False, "error": "document_write는 Markdown/텍스트 문서만 저장합니다."}
-    target.parent.mkdir(parents=True, exist_ok=True)
-    _atomic_write(target, content)
-    return {"ok": True, "path": str(target.relative_to(ctx.repo_root))}
+    return await file_write(ctx, path, content)
 
 
 def _atomic_write(target: Path, content: str) -> None:

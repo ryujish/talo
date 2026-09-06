@@ -2580,6 +2580,7 @@ export default function Page() {
   const [aiConnections, setAiConnections] = useState<AiConnection[]>([]);
   const [aiAccounts, setAiAccounts] = useState<AiAccount[]>([]);
   const [accountsLoaded, setAccountsLoaded] = useState(false);
+  const [accountsSynced, setAccountsSynced] = useState(false);
   const [providerAccountScreen, setProviderAccountScreen] = useState<Provider>('GPT');
   const [editingAccountId, setEditingAccountId] = useState<string | null>(null);
   const [previewMode] = useState(false);
@@ -2647,8 +2648,17 @@ export default function Page() {
   };
 
   const loadAiConnections = async () => {
-    const payload = await apiJson<{ providers: AiConnection[] }>('/api/ai/providers');
-    setAiConnections(payload.providers);
+    const [payload, discovery] = await Promise.all([
+      apiJson<{ providers: AiConnection[] }>('/api/ai/providers'),
+      apiJson<{ local: Array<{ provider: Provider; model: string; available: boolean }> }>('/api/ai/discovery'),
+    ]);
+    const merged = [...payload.providers];
+    for (const local of discovery.local.filter((item) => item.available)) {
+      const existing = merged.find((item) => item.provider === local.provider);
+      if (existing) Object.assign(existing, { connected: true, model: local.model });
+      else merged.push({ provider: local.provider, connected: true, model: local.model, requiredEnv: 'local OAuth' });
+    }
+    setAiConnections(merged);
   };
 
   useEffect(() => {
@@ -2735,12 +2745,31 @@ export default function Page() {
   useEffect(() => {
     if (!accountsLoaded) return;
     window.localStorage.setItem('think_along_ai_accounts_v2', JSON.stringify(aiAccounts.filter((account) => account.source !== 'server')));
+    if (user && accountsSynced) {
+      void apiJson('/api/ai/accounts', {
+        method: 'PUT',
+        body: JSON.stringify({ accounts: aiAccounts.filter((account) => account.source !== 'server').map((account) => ({
+          id: account.id, provider: account.provider, name: account.name, model: account.model,
+          isDefault: account.isDefault, status: account.status, lastCheckedAt: account.lastCheckedAt,
+        })) }),
+      }).catch(() => undefined);
+    }
     if (process.env.NODE_ENV === 'development' && aiAccounts.length) {
       void apiJson('/api/ai/dev-credentials', { method: 'POST', body: JSON.stringify({ accounts: aiAccounts }) })
         .then(loadAiConnections)
         .catch(() => undefined);
     }
-  }, [accountsLoaded, aiAccounts]);
+  }, [accountsLoaded, accountsSynced, aiAccounts, user]);
+
+  useEffect(() => {
+    if (!accountsLoaded || !user) return;
+    void apiJson<{ accounts: AiAccount[] }>('/api/ai/accounts')
+      .then(({ accounts }) => {
+        setAiAccounts((current) => [...current, ...accounts.filter((remote) => !current.some((local) => local.id === remote.id))]);
+      })
+      .catch(() => undefined)
+      .finally(() => setAccountsSynced(true));
+  }, [accountsLoaded, user]);
 
   useEffect(() => {
     if (!accountsLoaded) return;

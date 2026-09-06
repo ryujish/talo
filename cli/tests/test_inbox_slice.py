@@ -171,7 +171,8 @@ def test_inbox_unknown_request(env, monkeypatch, capsys):
 def test_daily_version_migration(repo):
     row = repo.conn.execute(
         "SELECT version FROM schema_migrations ORDER BY version DESC").fetchone()
-    assert row["version"] == 3
+    from talo.storage.db import MIGRATIONS
+    assert row["version"] == len(MIGRATIONS)
     tables = {r["name"] for r in repo.conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
     assert "approval_requests" in tables

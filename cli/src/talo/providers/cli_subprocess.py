@@ -72,7 +72,7 @@ class CliSubprocessAdapter(ModelAdapter):
             cmd.append("--json")
         if model_id:
             cmd += ["--model" if self.command == "agy" else "-m", model_id]
-        cwd = self.cwd or None
+        cwd = getattr(self, "isolated_cwd", None) or self.cwd or None
         if cwd and self.command != "agy":
             cmd += ["--dir" if self.command == "opencode" else "-C", cwd]
         if self.command == "agy":
@@ -81,7 +81,7 @@ class CliSubprocessAdapter(ModelAdapter):
             cmd.append(prompt)
 
         proc = await asyncio.create_subprocess_exec(
-            *cmd,
+            *getattr(self, "command_prefix", []), *cmd,
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -123,6 +123,13 @@ class CliSubprocessAdapter(ModelAdapter):
             await proc.wait()
             stderr_text = await stderr_task
         except BaseException:
+            if proc.returncode is None:
+                proc.terminate()
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=3)
+                except (asyncio.TimeoutError, ProcessLookupError):
+                    proc.kill()
+                    await proc.wait()
             stderr_task.cancel()
             await asyncio.gather(stderr_task, return_exceptions=True)
             raise

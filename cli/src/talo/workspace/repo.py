@@ -23,6 +23,8 @@ except ImportError:  # Windows
 
 
 def run_git(args: list[str], cwd: Path, timeout: float = 10.0) -> subprocess.CompletedProcess:
+    if __import__("shutil").which("git") is None:
+        return subprocess.CompletedProcess(["git", *args], 127, "", "Git 실행 파일 없음")
     return subprocess.run(
         ["git", *args],
         cwd=str(cwd),
@@ -100,6 +102,9 @@ class Workspace:
                     continue
                 xy = line[:2]
                 path = line[3:].strip()
+                if xy == "??":
+                    untracked.append(path)
+                    continue
                 if xy[0] != " ":
                     staged.append(path)
                 if xy[1] != " ":
@@ -108,7 +113,7 @@ class Workspace:
                     untracked.append(path)
 
         common_dir_proc = run_git(["rev-parse", "--git-common-dir"], root)
-        common_dir = Path(common_dir_proc.stdout.strip()).resolve() if common_dir_proc.returncode == 0 else None
+        common_dir = (root / common_dir_proc.stdout.strip()).resolve() if common_dir_proc.returncode == 0 else None
 
         branch = branch_proc.stdout.strip() if branch_proc.returncode == 0 else None
         head_sha = head_proc.stdout.strip() if head_proc.returncode == 0 else None
@@ -136,6 +141,18 @@ class Workspace:
             proc = run_git(["ls-files"], info.root)
             if proc.returncode == 0:
                 targets.update(line.strip() for line in proc.stdout.splitlines() if line.strip())
+        else:
+            from talo import paths
+            home = paths.talo_home().resolve()
+            for directory, dirs, names in os.walk(info.root):
+                dirs[:] = [d for d in dirs if d not in {".git", ".talo", ".venv", "node_modules", "__pycache__"}
+                           and not (Path(directory) / d).is_symlink() and (Path(directory) / d).resolve() != home]
+                for name in names:
+                    p = Path(directory) / name
+                    if not p.is_symlink() and p.stat().st_size <= 2 * 1024 * 1024:
+                        targets.add(str(p.relative_to(info.root)))
+                if len(targets) > 10000:
+                    raise RuntimeError("프로젝트 스냅샷 파일 상한(10000)을 초과했습니다")
         for rel in sorted(targets):
             p = info.root / rel
             if p.is_file():
@@ -205,8 +222,12 @@ class WriteLock:
                 fcntl.flock(self._fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                 return True
             except OSError:
+                self._fh.close()
+                self._fh = None
                 return False
-        return True
+        self._fh.close()
+        self._fh = None
+        raise RuntimeError("이 플랫폼의 파일 잠금이 지원되지 않습니다")
 
     def release(self) -> None:
         if self._fh is None:

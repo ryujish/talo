@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
 from talo.config import Config
+from talo.continuity import state_hash
 from talo.context.engine import ContextBlock, ContextEngine
 from talo.memory.store import MemoryStore
 from talo.permissions.policy import Decision, Grant, PermissionPolicy, mode_and_profile
@@ -97,6 +98,12 @@ class AgentRuntime:
                                       "exit_code": int(ExitCode.INPUT_ERROR)}, True)
             return RunOutcome(run_id, session_id, RunState.FAILED, ExitCode.INPUT_ERROR, guidance)
 
+        session = self.repository.get_session(session_id)
+        if session is None or session["workspace_id"] != workspace_id:
+            raise ValueError("현재 작업 공간의 세션이 아닙니다")
+        self._session_id = session_id
+        self._workspace_id = workspace_id
+        self._isolation = None
         self._adapter = self._build_adapter(resolved, model_id)
         policy = self._build_policy(project_id, mode, permission)
         self._executor = ToolExecutor(self.registry, policy, self.repository)
@@ -111,19 +118,42 @@ class AgentRuntime:
 
         snapshot_before = self.workspace.snapshot()
         memory_store = MemoryStore(self.repository, project_id)
-        conversation: list[dict[str, Any]] = [{"role": "user", "content": request}]
+        from talo.continuity import recent_messages, begin_task
+        conversation = recent_messages(self.repository, session_id)
+        conversation.append({"role": "user", "content": request})
+        begin_task(self.repository, workspace_id, session_id, run_id, request)
         self.repository.append_message(run_id, "user", json.dumps({"text": request}, ensure_ascii=False), source="user")
 
+        isolation = None
         try:
-            outcome = await self._loop(
+            if resolved.connection.protocol == "cli_subprocess":
+                from talo.changes.isolation import CliWorkspace
+                isolation = CliWorkspace(self.workspace.detect().root, self.config.exclude_paths)
+                self._adapter.isolated_cwd = str(isolation.stage)
+                self._adapter.command_prefix = isolation.prefix
+                self._isolation = isolation
+            outcome = await asyncio.wait_for(self._loop(
                 run_id=run_id, session_id=session_id, resolved=resolved, model_id=model_id,
                 project_id=project_id, policy=policy, memory_store=memory_store, conversation=conversation,
                 snapshot_before=snapshot_before, emit=emit, on_approval=on_approval,
-            )
+            ), timeout=self.run_config.timeout_seconds)
         except asyncio.CancelledError:
             await self._teardown(run_id)
+            self.repository.update_run_state(run_id, RunState.INTERRUPTED.value)
+            outcome = RunOutcome(run_id, session_id, RunState.INTERRUPTED, ExitCode.INTERRUPTED, "중단됨")
+            from talo.continuity import save_handoff
+            save_handoff(self, outcome, workspace_id, project_id, request)
             raise
-        await self._close_adapter()
+        except Exception as exc:
+            self.repository.update_run_state(run_id, RunState.FAILED.value)
+            outcome = RunOutcome(run_id, session_id, RunState.FAILED, ExitCode.FAILED, str(exc))
+            await emit("run.failed", {"run_id": run_id, "error": str(exc)}, True)
+        finally:
+            await self._close_adapter()
+            if isolation:
+                isolation.close()
+        from talo.continuity import save_handoff
+        save_handoff(self, outcome, workspace_id, project_id, request)
         return outcome
 
     async def steer(self, text: str) -> None:
@@ -179,6 +209,9 @@ class AgentRuntime:
         final_text = ""
         last_state = RunState.CALLING
 
+        heal_attempts: dict[str, int] = {}
+        heal_started = None
+        seen_failed_patches: set[str] = set()
         for iteration in range(max_iter):
             if self.cancel_requested.is_set():
                 await self._teardown(run_id)
@@ -234,16 +267,31 @@ class AgentRuntime:
             tool_calls = assistant.tool_calls
             if not tool_calls:
                 final_text = assistant.text or "완료"
+                if getattr(self, "_isolation", None):
+                    if policy.mode.value == "plan" or policy.profile.value == "read_only":
+                        if self._isolation.edits():
+                            self.repository.update_run_state(run_id, RunState.PAUSED.value)
+                            return RunOutcome(run_id, session_id, RunState.PAUSED, ExitCode.EXTERNAL_PAUSED,
+                                              "읽기·계획 모드에서 외부 CLI 변경을 적용하지 않았습니다")
+                    result = await self._review_external(run_id, session_id, on_approval, emit)
+                    if result:
+                        return result
                 break
 
             self.repository.update_run_state(run_id, RunState.CHECKING.value)
             last_state = RunState.CHECKING
+            conversation.append(assistant.as_openai_message())
             tool_results = []
             for tc in tool_calls:
                 outcome = await self._execute_tool(
                     run_id=run_id, session_id=session_id, project_id=project_id, policy=policy,
                     repo_info=repo_info, tc=tc, emit=emit, on_approval=on_approval,
                 )
+                if outcome.status == "review_required":
+                    self.repository.update_run_state(run_id, RunState.AWAITING_APPROVAL.value)
+                    await emit("change.proposed", {"run_id": run_id, **outcome.output}, True)
+                    return RunOutcome(run_id, session_id, RunState.AWAITING_APPROVAL,
+                                      ExitCode.APPROVAL_NEEDED, outcome.error or "변경 검토 필요")
                 if outcome.status == "approval_required":
                     safe_arguments = redact_scope(tc.arguments)
                     approval_request_id = self.repository.create_approval_request(
@@ -265,27 +313,44 @@ class AgentRuntime:
                     approved = await on_approval(tc.name, tc.arguments)
                     self.repository.decide_approval_request(
                         approval_request_id, "approved" if approved else "denied", "user")
-                    if not approved:
+                    if approved is not True:
                         tool_results.append({"call_id": tc.call_id, "output": {"denied": True,
                                               "reason": outcome.error}})
                         continue
                     outcome = await self._execute_tool(
                         run_id=run_id, session_id=session_id, project_id=project_id, policy=policy,
-                        repo_info=repo_info, tc=tc, emit=emit, on_approval=None, skip_policy=True,
+                        repo_info=repo_info, tc=tc, emit=emit, on_approval=on_approval, skip_policy=True,
                     )
                 if outcome.status == "denied":
+                    if policy.profile.value == "read_only":
+                        self.repository.update_run_state(run_id, RunState.FAILED.value)
+                        return RunOutcome(run_id, session_id, RunState.FAILED, ExitCode.FAILED,
+                                          outcome.error or "읽기 전용 범위에서 실행할 수 없습니다")
                     tool_results.append({"call_id": tc.call_id, "output": {"denied": True, "reason": outcome.error}})
                 elif outcome.status == "error":
-                    tool_results.append({"call_id": tc.call_id, "output": {"error": outcome.error}})
+                    detail = outcome.output or {"error": outcome.error}
+                    tool_results.append({"call_id": tc.call_id, "output": detail})
+                    if tc.name == "file_patch" and detail.get("code") in {"NO_MATCH", "AMBIGUOUS_MATCH", "STALE_BASE"}:
+                        key = str(tc.arguments.get("path", ""))
+                        if heal_started is None:
+                            heal_started = time.monotonic()
+                        signature = json.dumps(tc.arguments, sort_keys=True, ensure_ascii=False)
+                        repeated = signature in seen_failed_patches
+                        seen_failed_patches.add(signature)
+                        heal_attempts[key] = heal_attempts.get(key, 0) + 1
+                        if repeated or heal_attempts[key] > 2 or time.monotonic() - heal_started > 60:
+                            self.repository.update_run_state(run_id, RunState.PAUSED.value)
+                            return RunOutcome(run_id, session_id, RunState.PAUSED, ExitCode.EXTERNAL_PAUSED,
+                                              "패치 재생성 한도 도달. 최신 문맥과 변경을 검토하세요")
                 else:
                     tool_results.append({"call_id": tc.call_id, "output": outcome.output})
                     if outcome.status == "success":
                         execution_events.append({"call_id": tc.call_id, "tool": tc.name,
                                                  "status": "success", "at": time.time()})
-                if tc.name == "command_run":
+                if tc.name == "command_run" and isinstance(outcome.output, dict) and "exit_code" in outcome.output:
                     result = "passed" if outcome.status == "success" else "failed"
                     self.repository.record_verification(run_id, outcome.operation_id,
-                                                        snapshot_before.get("head"), result)
+                                                        state_hash(self.workspace.snapshot()), result)
                     verification_events.append({"command": tc.arguments.get("command"), "result": result})
                     await emit("verification.recorded", {
                         "run_id": run_id, "result": result,
@@ -296,6 +361,11 @@ class AgentRuntime:
                         "run_id": run_id, "tool": tc.name,
                         "paths": _changed_paths(tc.arguments),
                     }, True)
+
+            for tr in tool_results:
+                conversation.append({"role": "tool", "tool_call_id": tr["call_id"],
+                                     "content": json.dumps(tr["output"], ensure_ascii=False)})
+            tool_results = []
 
         else:
             self.repository.update_run_state(run_id, RunState.FAILED.value)
@@ -308,20 +378,6 @@ class AgentRuntime:
         # 종료: 완료 주장을 검증 기록과 대조
         snapshot_after = self.workspace.snapshot()
         changes = self.workspace.compare_snapshot(snapshot_before)
-        handoff = self.context_engine.handoff_document(
-            identity={"project_id": repo_info.root.name, "workspace_id": repo_info.root.name,
-                      "session_id": session_id, "run_id": run_id},
-            goal=conversation[0]["content"] if conversation else "",
-            constraints={"mode": policy.mode.value, "permission": policy.profile.value,
-                         "policy_version": policy.policy_version},
-            decisions=[],
-            workspace={"branch": repo_info.branch, "head": repo_info.head_sha, "changes": changes},
-            execution=execution_events,
-            verification=verification_events,
-            next_actions=["검증 결과 확인" if verification_events else "변경 검토"],
-            context_sources=["session:" + session_id],
-        )
-        self.repository.save_handoff(session_id, run_id, self.context_engine.context_version, handoff)
         self.repository.update_run_state(run_id, RunState.COMPLETED.value)
         await emit("run.completed", {
             "run_id": run_id,
@@ -330,7 +386,33 @@ class AgentRuntime:
             "verifications": verification_events,
             "exit_code": int(ExitCode.COMPLETED),
         }, True)
-        return RunOutcome(run_id, session_id, RunState.COMPLETED, ExitCode.COMPLETED, final_text, handoff)
+        return RunOutcome(run_id, session_id, RunState.COMPLETED, ExitCode.COMPLETED, final_text)
+
+    async def _review_external(self, run_id, session_id, on_approval, emit):
+        from talo.changes.manager import ChangeManager
+        edits = self._isolation.edits()
+        if not edits:
+            return None
+        manager = ChangeManager(self.workspace.detect().root, self.repository.db.path,
+                                self._artifacts_dir, self._workspace_id, self.config.exclude_paths)
+        c = manager.propose(edits, run_id=run_id, session_id=session_id, match_method="isolated_cli")
+        scope = {"change_id": c["id"], "patch_hash": c["patch_hash"], "revision": 1,
+                 "diff": manager.diff(c["id"]), "match_method": "isolated_cli"}
+        if on_approval is None:
+            self.repository.update_run_state(run_id, RunState.AWAITING_APPROVAL.value)
+            await emit("change.proposed", {"run_id": run_id, **scope}, True)
+            return RunOutcome(run_id, session_id, RunState.AWAITING_APPROVAL, ExitCode.APPROVAL_NEEDED,
+                              "변경 검토 필요: talo changes review " + c["id"])
+        decision = await on_approval("change_review", scope)
+        if decision is True:
+            manager.apply(c["id"], c["patch_hash"])
+            await emit("workspace.changed", {"run_id": run_id, "change_id": c["id"]}, True)
+        else:
+            manager.cancel(c["id"])
+            self.repository.update_run_state(run_id, RunState.PAUSED.value)
+            return RunOutcome(run_id, session_id, RunState.PAUSED, ExitCode.EXTERNAL_PAUSED,
+                              str(decision) if isinstance(decision, str) else "변경 취소됨")
+        return None
 
     async def _execute_tool(self, *, run_id: str, session_id: str, project_id: str,
                             policy: PermissionPolicy, repo_info: Any, tc: ToolCall, emit: EmitFn,
@@ -348,6 +430,8 @@ class AgentRuntime:
             on_approval=None,
             exclude_paths=self.config.exclude_paths,
             workspace=self.workspace,
+            workspace_id=self._workspace_id,
+            on_change_review=on_approval,
         )
         self._current_tool_context = ctx
         await emit("tool.prepared", {"run_id": run_id, "call_id": tc.call_id, "tool": tc.name,
@@ -364,6 +448,7 @@ class AgentRuntime:
                 "status": outcome.status,
                 "summary": outcome.error or _summarize(outcome.output),
                 "result_ref": outcome.result_ref,
+                "change_id": (outcome.output or {}).get("change_id"),
             }, True)
         return outcome
 
@@ -405,6 +490,16 @@ class AgentRuntime:
                          "계획 모드에서는 변경·실행을 하지 않는다. 승인 범위를 벗어난 실행은 요청하지 않는다.",
                          source="policy"),
         ]
+        if getattr(self, "_isolation", None):
+            blocks.append(ContextBlock("격리 작업 경로", str(self._isolation.stage) +
+                                       "\n모든 변경은 이 경로에서 수행한다. 원본 경로는 쓰기가 차단된다. 결과는 사용자 검토 후 적용된다.", source="runtime"))
+        previous = self.repository.latest_handoff(getattr(self, "_session_id", ""))
+        if previous:
+            blocks.append(ContextBlock("이전 작업 인계 (기록 데이터)", previous["document_json"],
+                                       source="handoff:" + previous["id"]))
+        decisions = memory_store.list(kind="decision", status="confirmed")
+        if decisions:
+            blocks.append(ContextBlock("확정 결정", "\n".join(d.content for d in decisions), source="memory"))
         rules = memory_store.active_rules()
         if rules:
             blocks.append(ContextBlock("프로젝트 규칙",
@@ -413,7 +508,8 @@ class AgentRuntime:
         blocks.append(ContextBlock("도구", tools_desc or "(없음)", source="tools"))
         skills = self.skill_loader.list_skills()
         if skills:
-            blocks.append(ContextBlock("스킬",
+            block_title = "스킬" if getattr(self.skill_loader, "lang", "ko") == "ko" else "Skills"
+            blocks.append(ContextBlock(block_title,
                                        "\n".join(f"- {s['name']}: {s['description']}" for s in skills),
                                        source="skills"))
         return blocks

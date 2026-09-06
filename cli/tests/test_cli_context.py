@@ -77,6 +77,36 @@ def test_interactive_exits_after_two_idle_ctrl_c(monkeypatch, capsys):
     assert "Talo를 종료합니다" in output
 
 
+def test_interactive_model_picker_runs_outside_event_loop(monkeypatch):
+    import prompt_toolkit
+    from talo.cli.interactive import run_interactive
+
+    class Prompt:
+        calls = 0
+
+        async def prompt_async(self, *_args, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return "/model"
+            raise EOFError
+
+    async def in_thread(function, *_args):
+        assert function.__name__ == "run_model_picker"
+        return "agy_cli:gemini-3.8-flash-high"
+
+    config = SimpleNamespace(default_mode="dev", default_permission="project_edit")
+    ctx = SimpleNamespace(
+        config=config,
+        resolver=SimpleNamespace(active=lambda: None),
+        repo_info=SimpleNamespace(summary=lambda: {}),
+    )
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr(prompt_toolkit, "PromptSession", lambda *_args, **_kwargs: Prompt())
+    monkeypatch.setattr(asyncio, "to_thread", in_thread)
+
+    assert asyncio.run(run_interactive(ctx, "ses_test")) == 0
+
+
 def test_context_engine_handoff():
     engine = ContextEngine()
     blocks = [ContextBlock("기본 규칙", "규칙 내용"), ContextBlock("도구", "file_read")]
@@ -127,3 +157,72 @@ def test_estimate_tokens_cjk():
     assert estimate_tokens("") == 0
     assert estimate_tokens("한글") == 2
     assert estimate_tokens("hello") == 1  # 5자/4 → 1
+
+
+def test_bilingual_skills_support(tmp_path, monkeypatch):
+    from talo.skills.loader import detect_system_language
+
+    # 1. Builtin skills bilingual check
+    loader_ko = SkillLoader(tmp_path, None, lang="ko")
+    skill_ko = loader_ko.load_skill("fix_error")
+    assert skill_ko["title"] == "오류 수정"
+    assert "오류 원인 파악" in skill_ko["description"]
+    assert len(skill_ko["description"]) <= 80
+
+    loader_en = SkillLoader(tmp_path, None, lang="en")
+    skill_en = loader_en.load_skill("fix_error")
+    assert skill_en["title"] == "Fix Error"
+    assert "Diagnose, fix" in skill_en["description"]
+    assert len(skill_en["description"]) <= 80
+
+    # 2. User skill with bilingual frontmatter
+    skill_dir = tmp_path / "custom_tool"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: custom_tool\n"
+        "description: Default long description that needs to be short\n"
+        "description_ko: 커스텀 도구 설명\n"
+        "description_en: Custom tool description\n"
+        "---\n"
+        "# Custom Tool Body\n",
+        encoding="utf-8",
+    )
+
+    custom_ko = loader_ko.load_skill("custom_tool")
+    assert custom_ko["description"] == "커스텀 도구 설명"
+
+    custom_en = loader_en.load_skill("custom_tool")
+    assert custom_en["description"] == "Custom tool description"
+
+    # 3. Environment variable override for language detection
+    monkeypatch.setenv("TALO_LANG", "ko_KR.UTF-8")
+    assert detect_system_language() == "ko"
+    monkeypatch.setenv("TALO_LANG", "en_US.UTF-8")
+    assert detect_system_language() == "en"
+
+
+
+def test_status_distinguishes_current_mode_from_last_run(capsys):
+    from talo.cli.interactive import _handle_slash_interactive
+
+    class Repository:
+        def list_runs(self, _session_id):
+            return [{"id": "run_old", "state": "completed", "mode": "dev"}]
+
+        conn = SimpleNamespace(execute=lambda *_args: SimpleNamespace(fetchall=lambda: []))
+
+    ctx = SimpleNamespace(
+        config=SimpleNamespace(default_mode="dev", default_permission="project_edit"),
+        repository=Repository(),
+    )
+    _handle_slash_interactive(
+        ctx,
+        "ses_test",
+        "/status",
+        active_mode="plan",
+        active_permission="project_edit",
+    )
+    output = capsys.readouterr().out
+    assert "현재 작업 방식: plan" in output
+    assert "당시 방식: dev" in output

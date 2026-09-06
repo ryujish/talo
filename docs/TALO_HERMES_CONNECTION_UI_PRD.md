@@ -269,18 +269,18 @@ status = "active"
 
 ### Phase 1 (P0): CLI 대화형 온보딩 & 로컬 자동 감지 (1주 차)
 - [x] 환경변수 및 로컬 auth 파일(Codex, OpenCode, AGY) 자동 스캔 구현.
-- [x] `talo setup` Rich 기반 번호 선택 TUI 마법사 구현. 화살표 탐색은 후속 개선 항목.
+- [x] `talo setup` Rich 기반 TUI와 화살표 키 탐색 구현(비대화형 환경은 번호 입력 유지).
 - [x] DeepCode, OpenRouter, Gemini 및 로컬 CLI 프리셋 내장.
 - [x] API 연결 Live Ping·모델 조회와 로컬 CLI 설치/OAuth 상태 검증 결과 표시.
 
 ### Phase 2 (P1): Web AI Connection Hub 고도화 (2주 차)
-- [ ] Next.js 웹 내 `/api/ai/discovery` 엔드포인트 신설.
+- [x] Next.js 웹 내 `/api/ai/discovery` 엔드포인트 신설.
 - [x] 웹 공급자 계정 화면, 공급자 카드, 연결 테스트, 모델 선택 UI 제작.
-- [ ] 로컬 스토리지 및 서버 계정 간의 양방향 동기화.
+- [x] 로컬 스토리지 및 서버 계정 간의 비밀값 제외 메타데이터 양방향 동기화.
 
 ### Phase 3 (P2): CLI Subprocess & MCP 하이브리드 브릿지 (3주 차)
-- [ ] `talo.integrations.mcp`: stdio 및 HTTP/SSE MCP 클라이언트 연동.
-- [ ] Think Along 공식 MCP (`https://mcp.flowpulse.ai.kr/mcp`) 원클릭 프리셋 활성화.
+- [x] `talo.integrations.mcp`: stdio 및 HTTP/SSE MCP 클라이언트 연동.
+- [x] Think Along 공식 MCP (`https://mcp.flowpulse.ai.kr/mcp`) 내장 명령 활성화.
 - [x] Codex·OpenCode·AGY OAuth CLI subprocess 브릿지 추가.
 
 ---

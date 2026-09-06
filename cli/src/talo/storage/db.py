@@ -191,6 +191,19 @@ MIGRATIONS: list[str] = [
 ]
 
 
+# v4: 사용자 검토 변경 묶음과 복구 journal. 이전 migration 체크섬은 유지한다.
+from talo.changes.manager import SCHEMA as CHANGES_SCHEMA
+from talo.continuity import SCHEMA as CONTINUITY_SCHEMA
+MIGRATIONS.append(CHANGES_SCHEMA + CONTINUITY_SCHEMA)
+MIGRATIONS.append("""
+CREATE TABLE IF NOT EXISTS core_requests (
+    workspace_id TEXT NOT NULL, request_id TEXT NOT NULL, body_hash TEXT NOT NULL,
+    state TEXT NOT NULL, result_json TEXT, created_at REAL NOT NULL,
+    PRIMARY KEY(workspace_id, request_id)
+);
+""")
+
+
 class Database:
     """프로젝트·레지스트리 공용 SQLite 래퍼."""
 
