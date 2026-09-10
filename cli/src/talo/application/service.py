@@ -51,6 +51,8 @@ def _project_id_for(canonical_path: str) -> str:
 
 def create_app_context(cwd: Path | None = None, config: Config | None = None) -> AppContext:
     workdir = (cwd or Path.cwd()).resolve()
+    if workdir.is_file():
+        workdir = workdir.parent
     ws = Workspace(workdir)
     repo_info = ws.detect()
     root = repo_info.root.resolve()
@@ -196,8 +198,10 @@ async def _run_request(ctx: AppContext, request: str, *, session_id: str, mode: 
     runtime = make_runtime(ctx, run_config)
     publisher = EventPublisher(ctx.repository, session_id, json_out=json_out,
                                on_human=on_human, out_stream=out_stream)
+    from talo.context.documents import resolve_document_request
+    resolved_request, _ = resolve_document_request(request, base_dir=ctx.cwd, repo_root=ctx.repo_info.root)
     outcome = await runtime.start(
-        request,
+        resolved_request,
         session_id=session_id,
         mode=mode,
         permission=permission,

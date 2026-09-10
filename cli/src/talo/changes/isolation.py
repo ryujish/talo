@@ -24,7 +24,7 @@ class CliWorkspace:
         self.temp = tempfile.TemporaryDirectory(prefix="talo-cli-")
         self.stage = Path(self.temp.name).resolve() / "workspace"
         self.stage.mkdir()
-        self.exclude = [".git", ".talo", "node_modules", ".venv", "__pycache__", ".env*", "*.pem", "*.key", *exclude_paths]
+        self.exclude = [".git", ".talo", ".codex", "node_modules", ".venv", "__pycache__", ".env*", "*.pem", "*.key", *exclude_paths]
         self.before: dict[str, str] = {}
         self.modes: dict[str, int] = {}
         try:

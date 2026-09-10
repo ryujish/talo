@@ -49,13 +49,18 @@ def show_changes(ctx, action="list", cid=None, *, patch_hash=None, json_out=Fals
                         console.print("적용했습니다. /undo 또는 talo undo로 되돌릴 수 있습니다.")
                     elif answer == "x":
                         result = manager.cancel(cid)
+                        console.print("변경을 취소했습니다.")
         elif action == "apply":
             if not cid or not patch_hash:
                 raise ChangeError("APPROVAL_REQUIRED", "변경 ID와 검토한 --hash가 필요합니다")
             result = manager.apply(cid, patch_hash)
         elif action == "cancel":
+            if not cid:
+                raise ChangeError("INVALID_ACTION", "변경 ID가 필요합니다: talo changes cancel <change-id>")
             result = manager.cancel(cid)
         elif action == "recover":
+            if not cid:
+                raise ChangeError("INVALID_ACTION", "변경 ID가 필요합니다: talo changes recover <change-id>")
             result = manager.recover(cid)
         elif action == "undo":
             result = manager.undo(cid)

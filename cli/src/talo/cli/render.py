@@ -13,11 +13,24 @@ from rich.text import Text
 
 console = Console()
 
+PERMISSION_MENU = [
+    ("1", "Ask for approval", "프로젝트 변경과 위험 명령을 실행 전 확인합니다"),
+    ("2", "Approve for me", "안전한 검사 명령과 프로젝트 변경은 자동으로 실행합니다"),
+    ("3", "Full Access", "현재 프로젝트에서 변경·명령을 확인 없이 실행합니다"),
+]
+PERMISSION_BY_CHOICE = {"1": "project_edit", "2": "approve_for_me", "3": "delegated"}
+PERMISSION_LABELS = {
+    "read_only": "Read Only",
+    "project_edit": "Ask for approval",
+    "approve_for_me": "Approve for me",
+    "delegated": "Full Access",
+}
+
 
 def header(info: dict[str, Any], model: str | None, mode: str, permission: str) -> None:
     lines = [
         f"[dim]프로젝트[/dim]  {info.get('root', '-')}  [dim]·[/dim]  {info.get('branch') or 'Git 없음'}",
-        f"[dim]작업 방식[/dim]  [bold cyan]{mode}[/bold cyan]  [dim]· 권한[/dim]  {permission}",
+        f"[dim]작업 방식[/dim]  [bold cyan]{mode}[/bold cyan]  [dim]· 권한[/dim]  {PERMISSION_LABELS.get(permission, permission)}",
         f"[dim]AI 모델[/dim]   {model or '연결 안 됨 — /connect로 설정'}",
     ]
     if info.get("limitation"):

@@ -56,7 +56,8 @@ async def run_interactive(ctx: Any, session_id: str) -> int:
     if conn and conn.connection:
         model = ctx.config.selected_model_id(conn.connection) or conn.connection.model_id
     info = ctx.repo_info.summary()
-    render.header(info, model, mode, permission)
+    variant = getattr(conn.connection, "model_variant", "") if conn and conn.connection else ""
+    render.header(info, f"{model} · {variant}" if model and variant else model, mode, permission)
 
     if not sys.stdin.isatty():
         # 파이프 입력: 한 줄씩 처리하는 단순 모드 (테스트·스크립트용)
@@ -138,7 +139,7 @@ async def run_interactive(ctx: Any, session_id: str) -> int:
 
     while True:
         try:
-            text = await session_prompt.prompt_async()
+            text = await session_prompt.prompt_async("› ")
         except KeyboardInterrupt:
             if ctrl_c_armed:
                 render.console.print("\n[dim]Talo를 종료합니다.[/dim]")
@@ -154,46 +155,94 @@ async def run_interactive(ctx: Any, session_id: str) -> int:
         if not text:
             continue
         if text.startswith("/"):
-            changed = await handle_slash(text)
-            if changed == "quit":
-                return int(ExitCode.COMPLETED)
-            if changed and isinstance(changed, dict):
-                if "session_id" in changed:
-                    session_id = changed["session_id"]
-                if "run_request" in changed:
+            first_word = text.split()[0]
+            if first_word in COMMANDS_HELP or first_word in {"/exit", "/quit"}:
+                changed = await handle_slash(text)
+                if changed == "quit":
+                    return int(ExitCode.COMPLETED)
+                if changed and isinstance(changed, dict):
+                    if "session_id" in changed:
+                        session_id = changed["session_id"]
+                    if "run_request" in changed:
+                        outcome = await run_request(
+                            ctx,
+                            changed["run_request"],
+                            session_id=session_id,
+                            mode=mode,
+                            permission=permission,
+                            on_human=render.print_event,
+                        )
+                        _print_outcome(outcome)
+                        continue
+                    if "mode" in changed:
+                        mode = changed["mode"]
+                    if "permission" in changed:
+                        permission = changed["permission"]
+                    conn = ctx.resolver.active()
+                    model = None
+                    if conn and conn.connection:
+                        model = ctx.config.selected_model_id(conn.connection) or conn.connection.model_id
+                    variant = getattr(conn.connection, "model_variant", "") if conn and conn.connection else ""
+                    render.header(
+                        ctx.repo_info.summary(),
+                        f"{model} · {variant}" if model and variant else model,
+                        mode,
+                        permission,
+                    )
+                continue
+            else:
+                from pathlib import Path
+                from talo.context.documents import is_document_path, resolve_document_request
+                cand = first_word.strip("'\"")
+                cand_p = Path(cand).expanduser()
+                if cand_p.is_file() or is_document_path(cand, ctx.cwd):
+                    resolved_text, docs = resolve_document_request(text, base_dir=ctx.cwd, repo_root=ctx.repo_info.root)
+                    for d in docs:
+                        render.console.print(f"[green]📄 문서 로드됨:[/green] {d['name']} ({d['total_lines']}줄, {d['size']}B)")
                     outcome = await run_request(
                         ctx,
-                        changed["run_request"],
+                        resolved_text,
                         session_id=session_id,
                         mode=mode,
                         permission=permission,
                         on_human=render.print_event,
+                        on_approval=lambda tool, scope: _approval_prompt(session_prompt, tool, scope),
                     )
                     _print_outcome(outcome)
                     continue
-                if "mode" in changed:
-                    mode = changed["mode"]
-                if "permission" in changed:
-                    permission = changed["permission"]
-                conn = ctx.resolver.active()
-                model = None
-                if conn and conn.connection:
-                    model = ctx.config.selected_model_id(conn.connection) or conn.connection.model_id
-                render.header(ctx.repo_info.summary(), model, mode, permission)
-            continue
+                elif cand.count("/") > 1 or cand_p.suffix:
+                    render.console.print(f"[yellow]파일을 찾을 수 없습니다: {first_word}[/yellow]")
+                    continue
+                else:
+                    render.console.print(f"[yellow]알 수 없는 명령: {first_word}[/yellow] (/help)")
+                    continue
 
         # 자연어 요청 → 같은 기능 접근 가능
         lowered = text.lower()
-        if "모델 바꿔" in text or lowered == "model":
+        if "모델 바꿔" in text or lowered in ("model", "모델"):
             await handle_slash("/model")
             continue
-        if "변경 내용" in text or lowered == "diff":
+        if "변경 내용" in text or lowered in ("diff", "디프"):
             _handle_slash_interactive(ctx, session_id, "/diff")
             continue
+        if lowered in ("undo", "되돌려", "되돌리기", "롤백"):
+            _handle_slash_interactive(ctx, session_id, "/undo")
+            continue
+        if lowered in ("review", "검토", "변경 검토"):
+            _handle_slash_interactive(ctx, session_id, "/review")
+            continue
+        if lowered in ("tasks", "할일", "남은 작업", "작업 목록"):
+            _handle_slash_interactive(ctx, session_id, "/tasks")
+            continue
+
+        from talo.context.documents import resolve_document_request
+        resolved_text, docs = resolve_document_request(text, base_dir=ctx.cwd, repo_root=ctx.repo_info.root)
+        for d in docs:
+            render.console.print(f"[green]📄 문서 로드됨:[/green] {d['name']} ({d['total_lines']}줄, {d['size']}B)")
 
         runtime_ref: dict[str, Any] = {}
         try:
-            outcome = await run_request(ctx, text, session_id=session_id, mode=mode, permission=permission,
+            outcome = await run_request(ctx, resolved_text, session_id=session_id, mode=mode, permission=permission,
                                         on_human=render.print_event,
                                         on_approval=lambda tool, scope: _approval_prompt(session_prompt, tool, scope))
             _print_outcome(outcome)
@@ -205,33 +254,38 @@ async def run_interactive(ctx: Any, session_id: str) -> int:
     return int(ExitCode.COMPLETED)
 
 
-async def _approval_prompt(session_prompt: Any, tool: str, scope: dict[str, Any]) -> bool:
+async def _approval_prompt(session_prompt: Any, tool: str, scope: dict[str, Any]) -> bool | str:
     from talo.cli import render
 
-    if tool == "change_review":
-        from talo.cli.changes import print_diff
-        render.console.print(f"변경 검토 · {scope['change_id']} · {scope.get('match_method', 'exact')}", markup=False)
-        print_diff(scope["diff"])
+    orig_msg = getattr(session_prompt, "message", "› ")
+    try:
+        if tool == "change_review":
+            from talo.cli.changes import print_diff
+            render.console.print(f"변경 검토 · {scope['change_id']} · {scope.get('match_method', 'exact')}", markup=False)
+            print_diff(scope["diff"])
+            try:
+                answer = (await session_prompt.prompt_async("적용 [a] / 수정 요청 [e] / 취소 [Enter]: ")).strip().lower()
+                if answer == "e":
+                    feedback = (await session_prompt.prompt_async("수정할 내용: ")).strip()
+                    return feedback or False
+                return answer == "a"
+            except (EOFError, KeyboardInterrupt):
+                return False
+        render.console.print(f"[yellow]승인 요청: {tool}[/yellow]")
+        render.console.print(f"  실행 내용: {json.dumps(scope, ensure_ascii=False)[:200]}")
+        render.menu_table("승인 선택", [
+            ("1", "이번만 허용", "이 도구 호출 한 번만 실행합니다"),
+            ("2", "거절", "도구를 실행하지 않고 대화를 계속합니다"),
+        ])
         try:
-            answer = (await session_prompt.prompt_async("적용 [a] / 수정 요청 [e] / 취소 [Enter]: ")).strip().lower()
-            if answer == "e":
-                feedback = (await session_prompt.prompt_async("수정할 내용: ")).strip()
-                return feedback or False
-            return answer == "a"
+            answer = await session_prompt.prompt_async("선택 (1/2): ")
         except (EOFError, KeyboardInterrupt):
             return False
-    render.console.print(f"[yellow]승인 요청: {tool}[/yellow]")
-    render.console.print(f"  실행 내용: {json.dumps(scope, ensure_ascii=False)[:200]}")
-    render.menu_table("승인 선택", [
-        ("1", "이번만 허용", "이 도구 호출 한 번만 실행합니다"),
-        ("2", "거절", "도구를 실행하지 않고 대화를 계속합니다"),
-    ])
-    try:
-        answer = await session_prompt.prompt_async("선택 (1/2): ")
-    except (EOFError, KeyboardInterrupt):
-        return False
-    answer = answer.strip()
-    return answer in {"1", "y", "yes", "허용"}
+        answer = answer.strip()
+        return answer in {"1", "y", "yes", "허용"}
+    finally:
+        if hasattr(session_prompt, "message"):
+            session_prompt.message = orig_msg
 
 
 def _print_outcome(outcome: Any) -> None:
@@ -288,9 +342,27 @@ def _handle_slash_interactive(
     if cmd == "/permissions":
         current_mode = active_mode or ctx.config.default_mode
         current_permission = active_permission or ctx.config.default_permission
-        render.console.print(f"현재 작업 방식: {current_mode} · 권한: {current_permission}")
-        render.console.print("권한 변경은 /plan, /dev 또는 `talo run --permission`을 사용하세요.")
-        return None
+        choice = arg.strip().lower()
+        if not choice:
+            render.console.print(
+                f"현재 작업 방식: {current_mode} · 권한: {render.PERMISSION_LABELS.get(current_permission, current_permission)}"
+            )
+            from talo.cli.connection_wizard import _choose_menu
+
+            choice = _choose_menu("권한 설정", render.PERMISSION_MENU, "\n선택 (1~3, 0=취소): ", cancel_key="0")
+        aliases = {
+            "ask": "1", "ask_for_approval": "1", "project_edit": "1",
+            "approve": "2", "approve_for_me": "2",
+            "full": "3", "full_access": "3", "delegated": "3",
+        }
+        permission = render.PERMISSION_BY_CHOICE.get(aliases.get(choice, choice))
+        if permission is None:
+            if choice not in {"", "0", "cancel", "취소"}:
+                render.console.print("[yellow]권한 선택은 1~3 중 하나입니다.[/yellow]")
+            return None
+        ctx.config.update(default_permission=permission)
+        render.console.print(f"[green]권한 변경: {render.PERMISSION_LABELS[permission]}[/green]")
+        return {"permission": permission}
     if cmd == "/model":
         conns = list(ctx.config.connections.values())
         if not conns:
@@ -340,6 +412,21 @@ def _handle_slash_interactive(
     if cmd == "/new":
         return {"session_id": start_session(ctx)}
     if cmd == "/tasks":
+        clean_arg = arg.strip()
+        if clean_arg.startswith("done"):
+            parts = clean_arg.split(maxsplit=2)
+            if len(parts) < 2 or not parts[1].strip():
+                render.console.print("[yellow]사용법: /tasks done <task-id> [완료 근거][/yellow]")
+                return None
+            tid = parts[1].strip()
+            evidence = parts[2].strip() if len(parts) > 2 else "대화형 확인 완료"
+            from talo.continuity import finish_task
+            try:
+                finish_task(ctx.repository, ctx.workspace_id, tid, evidence)
+                render.console.print(f"[green]작업 완료 처리됨: {tid}[/green]")
+            except Exception as exc:
+                render.console.print(f"[red]{exc}[/red]")
+            return None
         from talo.cli.changes import show_resume
         show_resume(ctx, session_id)
         return None
@@ -438,6 +525,20 @@ def _handle_slash_interactive(
     if cmd == "/connect":
         from talo.cli.connection_wizard import run_connect_interactive
         run_connect_interactive(ctx.config, ctx.resolver.credentials_store)
+        return None
+    from pathlib import Path
+    from talo.context.documents import is_document_path, resolve_document_request
+    cand = cmd.strip("'\"")
+    cand_p = Path(cand).expanduser()
+    base_dir = ctx.cwd if ctx and hasattr(ctx, "cwd") else Path.cwd()
+    repo_root = ctx.repo_info.root if ctx and hasattr(ctx, "repo_info") else base_dir
+    if cand_p.is_file() or is_document_path(cand, base_dir):
+        resolved_text, docs = resolve_document_request(text, base_dir=base_dir, repo_root=repo_root)
+        for d in docs:
+            render.console.print(f"[green]📄 문서 로드됨:[/green] {d['name']} ({d['total_lines']}줄, {d['size']}B)")
+        return {"run_request": resolved_text}
+    if cand.count("/") > 1 or cand_p.suffix:
+        render.console.print(f"[yellow]파일을 찾을 수 없습니다: {cmd}[/yellow]")
         return None
     render.console.print(f"[yellow]알 수 없는 명령: {cmd}[/yellow] (/help)")
     return None

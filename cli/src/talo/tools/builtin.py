@@ -95,14 +95,18 @@ async def file_list(ctx: ToolContext, path: str = ".", depth: int = 2) -> dict[s
 
 
 async def file_read(ctx: ToolContext, path: str, offset: int = 0, limit: int = 400) -> dict[str, Any]:
-    target = ctx.resolve_path(path)
+    target = ctx.resolve_path(path, allow_external=True)
     if not target.is_file():
         return {"ok": False, "error": f"파일이 아님: {path}"}
     lines = target.read_text(encoding="utf-8", errors="replace").splitlines()
     chunk = lines[offset:offset + limit]
+    try:
+        rel_str = str(target.relative_to(ctx.repo_root))
+    except ValueError:
+        rel_str = str(target)
     return {
         "ok": True,
-        "path": str(target.relative_to(ctx.repo_root)),
+        "path": rel_str,
         "offset": offset,
         "total_lines": len(lines),
         "content": "\n".join(chunk),
@@ -120,6 +124,12 @@ async def _submit_change(ctx: ToolContext, path: str, content: bytes | None,
         scope = {"change_id": change["id"], "patch_hash": change["patch_hash"],
                  "revision": change["revision"], "diff": manager.diff(change["id"]),
                  "match_method": match_method, "path": path}
+        profile = getattr(getattr(ctx, "policy", None), "profile", None)
+        if getattr(profile, "value", profile) in {"approve_for_me", "delegated"}:
+            manager.apply(change["id"], change["patch_hash"])
+            f = change["manifest"]["files"][0]
+            return {"ok": True, "path": f["path"], "before_hash": f["before"], "after_hash": f["after"],
+                    "change_id": change["id"], "checkpoint_id": change["id"]}
         if ctx.on_change_review is None:
             return {"ok": False, "review_required": True, **scope,
                     "error": "변경 검토 필요: talo changes review " + change["id"]}

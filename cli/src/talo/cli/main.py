@@ -38,7 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--plan", action="store_true", help="계획 모드로 수행")
     p_run.add_argument("--json", action="store_true", help="구조화된 JSONL 이벤트 출력")
     p_run.add_argument("--model", help="사용할 모델 (connection_id:model_id 또는 model_id)")
-    p_run.add_argument("--permission", choices=["read_only", "project_edit", "delegated"], default=None)
+    p_run.add_argument("--permission", choices=["read_only", "project_edit", "approve_for_me", "delegated"], default=None)
     p_run.add_argument("--session", help="이어갈 세션 ID")
     p_run.add_argument("--max-iterations", type=int, default=None)
 
@@ -218,9 +218,50 @@ def auto_connect_from_env(config: Config) -> bool:
     return False
 
 
+KNOWN_COMMANDS = {
+    "remote", "run", "resume", "connect", "changes", "undo", "tasks",
+    "serve", "demo", "setup", "model", "cron", "inbox", "daily",
+    "mcp", "orchestrate", "doctor",
+}
+
+
+def preprocess_argv(argv: list[str] | None) -> list[str] | None:
+    """서브커맨드 없이 문서 경로 또는 프롬프트가 주어졌을 때 run 요청으로 자동 변환."""
+    if argv is None:
+        raw = sys.argv[1:]
+    else:
+        raw = list(argv)
+
+    if not raw:
+        return argv
+
+    first = raw[0]
+    if first in KNOWN_COMMANDS or first in {"-h", "--help", "-v", "--version"}:
+        return argv
+
+    # 첫 번째 인자가 서브커맨드가 아니면 run 요청으로 처리
+    positionals: list[str] = []
+    options: list[str] = []
+    i = 0
+    while i < len(raw):
+        arg = raw[i]
+        if arg.startswith("-"):
+            options.append(arg)
+            if arg in {"--model", "--session", "--permission", "--max-iterations"} and i + 1 < len(raw):
+                i += 1
+                options.append(raw[i])
+        else:
+            positionals.append(arg)
+        i += 1
+
+    req_str = " ".join(positionals)
+    return ["run", req_str, *options]
+
+
 def main(argv: list[str] | None = None) -> int:
+    effective_argv = preprocess_argv(argv)
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(effective_argv)
     if args.command in {None, "run", "resume", "connect", "setup", "model", "doctor"}:
         load_dotenv_files()
         config = Config.load()
@@ -235,9 +276,15 @@ def main(argv: list[str] | None = None) -> int:
                 from talo.continuity import tasks, finish_task
                 from talo.cli.render import console
                 if args.action == "done":
+                    if not args.task_id:
+                        raise ValueError("작업 ID가 필요합니다: talo tasks done <task-id> --evidence \"근거\"")
                     finish_task(ctx.repository, ctx.workspace_id, args.task_id, args.evidence)
-                for task in tasks(ctx.repository, ctx.workspace_id):
+                    console.print(f"[green]작업 완료 처리: {args.task_id}[/green]")
+                all_tasks = tasks(ctx.repository, ctx.workspace_id)
+                for task in all_tasks:
                     console.print(f"{task['id']} [{task['status']}] {task['title']}", markup=False)
+                if not all_tasks:
+                    console.print("열린 작업이 없습니다.")
                 return 0
             return show_changes(ctx, "undo" if args.command == "undo" else args.action,
                                 args.change_id, patch_hash=getattr(args, "patch_hash", None), json_out=args.json)
@@ -314,8 +361,16 @@ async def _cmd_run(args: argparse.Namespace) -> int:
             else:
                 print_event(event_type, payload)
 
+        from talo.context.documents import resolve_document_request
+        resolved_request, docs = resolve_document_request(
+            args.request, base_dir=ctx.cwd, repo_root=ctx.repo_info.root
+        )
+        if docs and not args.json:
+            for d in docs:
+                console.print(f"[green]📄 문서 로드됨:[/green] {d['name']} ({d['total_lines']}줄, {d['size']}B)")
+
         outcome = await run_request(
-            ctx, args.request, session_id=session_id, mode=mode, permission=permission,
+            ctx, resolved_request, session_id=session_id, mode=mode, permission=permission,
             connection_id=connection_id, model_id=model_id, json_out=args.json,
             on_human=on_human, run_config=run_config,
         )

@@ -52,6 +52,20 @@ def test_approval_menu_does_not_claim_session_grant(capsys):
     assert "세션 허용" not in output
 
 
+def test_permissions_menu_persists_approve_for_me(monkeypatch, tmp_path, capsys):
+    from talo.cli.interactive import _handle_slash_interactive
+    from talo.config import Config
+
+    config = Config(path=tmp_path / "config.toml")
+    ctx = SimpleNamespace(config=config)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "2")
+    result = _handle_slash_interactive(ctx, "ses_test", "/permissions")
+
+    assert result == {"permission": "approve_for_me"}
+    assert config.default_permission == "approve_for_me"
+    assert "Approve for me" in capsys.readouterr().out
+
+
 def test_interactive_exits_after_two_idle_ctrl_c(monkeypatch, capsys):
     import prompt_toolkit
     from talo.cli.interactive import run_interactive

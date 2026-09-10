@@ -34,7 +34,7 @@ def serve():
                 ctx = create_app_context(Path(req["cwd"]))
                 manager = for_context(ctx)
                 params = req.get("params", {})
-                mutating = method in {"session.start", "run", "changes.apply", "changes.undo", "changes.cancel", "changes.recover"}
+                mutating = method in {"session.start", "run", "changes.apply", "changes.undo", "changes.cancel", "changes.recover", "tasks.done"}
                 if mutating:
                     body_hash = hashlib.sha256(json.dumps(req, sort_keys=True).encode()).hexdigest()
                     ctx.repository.conn.execute("BEGIN IMMEDIATE")
@@ -79,6 +79,14 @@ def serve():
                     result = manager.recover(params["change_id"])
                 elif method == "tasks.list":
                     result = tasks(ctx.repository, ctx.workspace_id)
+                elif method == "tasks.done":
+                    from talo.continuity import finish_task
+                    task_id = params.get("task_id")
+                    evidence = params.get("evidence", "확인 완료")
+                    if not task_id:
+                        raise ValueError("task_id가 필요합니다")
+                    finish_task(ctx.repository, ctx.workspace_id, task_id, evidence)
+                    result = {"ok": True, "task_id": task_id, "status": "done"}
                 else:
                     raise ValueError("지원하지 않는 method")
             response = json.dumps({"version": 1, "id": request_id, "type": "result", "result": result}, ensure_ascii=False)

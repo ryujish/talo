@@ -32,6 +32,21 @@ def test_workspace_detect(git_repo):
     assert not info.is_dirty
 
 
+def test_workspace_detect_cache_can_refresh(git_repo, monkeypatch):
+    ws = Workspace(git_repo)
+    original = ws.detect
+    calls = []
+
+    def counted(*, refresh=False):
+        calls.append(refresh)
+        return original(refresh=refresh)
+
+    monkeypatch.setattr(ws, "detect", counted)
+    ws.snapshot()
+    ws.snapshot()
+    assert calls == [True, True]
+
+
 def test_workspace_snapshot_compare(git_repo):
     ws = Workspace(git_repo)
     before = ws.snapshot()
@@ -64,6 +79,15 @@ def test_project_edit_requires_command_approval():
     delegated = PermissionPolicy(mode=delegated_mode, profile=delegated_profile, project_root="/tmp/repo")
     assert all(delegated.evaluate(tool).allowed
                for tool in ("memory_confirm", "memory_update", "memory_retire"))
+
+
+def test_approve_for_me_only_prompts_risky_commands():
+    mode, profile = mode_and_profile("dev", "approve_for_me")
+    policy = PermissionPolicy(mode=mode, profile=profile, project_root="/tmp/repo")
+    assert policy.evaluate("file_patch").allowed
+    assert policy.evaluate("command_run", {"argv": ["pytest", "-q"]}).allowed
+    risky = policy.evaluate("command_run", {"argv": ["curl", "https://example.com"]})
+    assert not risky.allowed and risky.requires_approval
 
 
 def test_grant_matches_saved_scope():
@@ -102,6 +126,18 @@ def test_file_read_and_patch(git_repo):
     # 해시 불일치 시 거부
     result2 = asyncio.run(builtin.file_patch(ctx, "a.txt", "hi", "yo", expected_hash="deadbeef"))
     assert not result2["ok"] and "해시" in result2["error"]
+
+
+def test_approve_for_me_applies_project_change_without_review(git_repo):
+    from talo.tools import builtin
+
+    mode, profile = mode_and_profile("dev", "approve_for_me")
+    ctx = ToolContext(repo_root=git_repo, workdir=git_repo, project_id="p", session_id="s",
+                      run_id="r", artifacts_dir=git_repo / ".art",
+                      policy=PermissionPolicy(mode=mode, profile=profile, project_root=str(git_repo)))
+    result = asyncio.run(builtin.file_write(ctx, "auto.txt", "approved"))
+    assert result["ok"]
+    assert (git_repo / "auto.txt").read_text() == "approved"
 
 
 def test_command_run(git_repo):

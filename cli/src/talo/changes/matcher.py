@@ -38,6 +38,6 @@ def replacement(content: str, old: str, new: str) -> tuple[str, str]:
     matched = "".join(source[i:i + len(target)])
     ending = "\r\n" if "\r\n" in matched else "\n"
     replacement_text = new.replace("\r\n", "\n").replace("\n", ending)
-    if matched.endswith(("\n", "\r")) and not old.endswith(("\n", "\r")):
+    if matched.endswith(("\n", "\r")) and not old.endswith(("\n", "\r")) and not new.endswith(("\n", "\r")):
         replacement_text += ending
     return "".join(source[:i]) + replacement_text + "".join(source[i + len(target):]), method

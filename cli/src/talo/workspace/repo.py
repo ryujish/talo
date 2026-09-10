@@ -67,17 +67,23 @@ class Workspace:
     """현재 폴더 기준 저장소 인식과 변경 추적."""
 
     def __init__(self, cwd: Path | None = None):
-        self.cwd = (cwd or Path.cwd()).resolve()
+        target = (cwd or Path.cwd()).resolve()
+        self.cwd = target.parent if target.is_file() else target
+        self._info_cache: RepoInfo | None = None
 
-    def detect(self) -> RepoInfo:
+    def detect(self, *, refresh: bool = False) -> RepoInfo:
+        if self._info_cache is not None and not refresh:
+            return self._info_cache
         if not self.cwd.exists():
-            return RepoInfo(is_git=False, root=self.cwd, common_dir=None, branch=None,
+            info = RepoInfo(is_git=False, root=self.cwd, common_dir=None, branch=None,
                             head_sha=None, is_dirty=False, workdir=self.cwd,
                             limitation_note="경로가 존재하지 않음")
+            self._info_cache = info
+            return info
 
         root_proc = run_git(["rev-parse", "--show-toplevel"], self.cwd)
         if root_proc.returncode != 0:
-            return RepoInfo(
+            info = RepoInfo(
                 is_git=False,
                 root=self.cwd,
                 common_dir=None,
@@ -87,6 +93,8 @@ class Workspace:
                 workdir=self.cwd,
                 limitation_note="Git 저장소가 아님 — Git 기반 비교·복구 기능 제한",
             )
+            self._info_cache = info
+            return info
 
         root = Path(root_proc.stdout.strip()).resolve()
         branch_proc = run_git(["rev-parse", "--abbrev-ref", "HEAD"], root)
@@ -118,7 +126,7 @@ class Workspace:
         branch = branch_proc.stdout.strip() if branch_proc.returncode == 0 else None
         head_sha = head_proc.stdout.strip() if head_proc.returncode == 0 else None
 
-        return RepoInfo(
+        info = RepoInfo(
             is_git=True,
             root=root,
             common_dir=common_dir,
@@ -130,10 +138,12 @@ class Workspace:
             untracked=untracked,
             workdir=self.cwd,
         )
+        self._info_cache = info
+        return info
 
     def snapshot(self) -> dict[str, Any]:
         """현재 파일 상태 스냅샷: 추적·변경 대상 파일의 해시와 HEAD."""
-        info = self.detect()
+        info = self.detect(refresh=True)
         files: dict[str, str] = {}
         targets: set[str] = set(info.changed + info.staged + info.untracked)
         if info.is_git:
@@ -166,14 +176,14 @@ class Workspace:
         }
 
     def diff_stat(self) -> str:
-        info = self.detect()
+        info = self.detect(refresh=True)
         if not info.is_git:
             return info.limitation_note
         proc = run_git(["diff", "--stat"], info.root)
         return proc.stdout.strip() or "(변경 없음)"
 
     def git_diff(self) -> str:
-        info = self.detect()
+        info = self.detect(refresh=True)
         if not info.is_git:
             return ""
         proc = run_git(["diff", "HEAD"], info.root)

@@ -48,6 +48,7 @@ class WorkMode(str, enum.Enum):
 class PermissionProfile(str, enum.Enum):
     READ_ONLY = "read_only"
     PROJECT_EDIT = "project_edit"
+    APPROVE_FOR_ME = "approve_for_me"
     DELEGATED = "delegated"
 
 

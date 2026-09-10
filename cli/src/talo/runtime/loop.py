@@ -398,6 +398,10 @@ class AgentRuntime:
         c = manager.propose(edits, run_id=run_id, session_id=session_id, match_method="isolated_cli")
         scope = {"change_id": c["id"], "patch_hash": c["patch_hash"], "revision": 1,
                  "diff": manager.diff(c["id"]), "match_method": "isolated_cli"}
+        if self._executor and self._executor.policy.profile.value in {"approve_for_me", "delegated"}:
+            manager.apply(c["id"], c["patch_hash"])
+            await emit("workspace.changed", {"run_id": run_id, "change_id": c["id"]}, True)
+            return None
         if on_approval is None:
             self.repository.update_run_state(run_id, RunState.AWAITING_APPROVAL.value)
             await emit("change.proposed", {"run_id": run_id, **scope}, True)

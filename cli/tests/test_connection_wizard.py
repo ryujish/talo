@@ -225,10 +225,24 @@ def test_model_picker_shows_opencode_zen_catalog(tmp_path):
     )
     cfg.set_connection(conn)
 
-    with patch("builtins.input", side_effect=["7", "2"]):
+    with patch("builtins.input", side_effect=["5", "7", "4"]):
         picked = run_model_picker(cfg)
 
     assert picked == "opencode_1:opencode/ling-3.0-flash-fin-free"
+
+
+def test_model_picker_selects_opencode_reasoning_variant(tmp_path):
+    cfg = Config(path=tmp_path / "config.toml")
+    cfg.set_connection(ConnectionConfig(
+        "opencode_1", "opencode", protocol="cli_subprocess",
+        model_id="opencode/gpt-5.6-luna", command="opencode",
+    ))
+
+    with patch("builtins.input", side_effect=["5", "1", "4"]):
+        picked = run_model_picker(cfg)
+
+    assert picked == "opencode_1:opencode/gpt-5.6-luna"
+    assert cfg.connection("opencode_1").model_variant == "max"
 
 
 def test_model_picker_auto_connects_local_opencode(tmp_path):
@@ -240,7 +254,7 @@ def test_model_picker_auto_connects_local_opencode(tmp_path):
     with (
         patch("talo.cli.connection_wizard.Path.home", return_value=tmp_path),
         patch("talo.cli.connection_wizard.shutil.which", return_value="/bin/opencode"),
-        patch("builtins.input", side_effect=["4", "1"]),
+        patch("builtins.input", side_effect=["5", "5"]),
     ):
         picked = run_model_picker(cfg)
 
@@ -300,6 +314,84 @@ def test_agy_bridge_uses_dangerous_permissions_flag(tmp_path):
         "agy", "--dangerously-skip-permissions", "--model", "gemini-3.8-flash-high",
     ]
     assert called[4:] == ["--print", "test"]
+
+
+def test_cli_bridge_passes_model_variant(tmp_path):
+    conn = ConnectionConfig(
+        "agy_cli", "agy", protocol="cli_subprocess",
+        model_id="gemini-3.8-flash-high", model_variant="low",
+        command="agy", cwd=str(tmp_path),
+    )
+    called: list[str] = []
+
+    class Process:
+        returncode = 0
+        stderr = None
+
+        class Stdout:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise StopAsyncIteration
+
+        stdout = Stdout()
+
+        async def wait(self):
+            return 0
+
+    async def spawn(*args, **_kwargs):
+        called.extend(args)
+        return Process()
+
+    with patch("asyncio.create_subprocess_exec", new=spawn):
+        asyncio.run(CliSubprocessAdapter(conn).complete([{"role": "user", "content": "test"}]))
+
+    assert "--effort" in called and called[called.index("--effort") + 1] == "low"
+
+
+def test_codex_bridge_uses_writable_isolated_codex_home(tmp_path, monkeypatch):
+    source_home = tmp_path / "source-codex"
+    source_home.mkdir()
+    (source_home / "auth.json").write_text('{"access_token":"test"}', encoding="utf-8")
+    monkeypatch.setenv("CODEX_HOME", str(source_home))
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    conn = ConnectionConfig(
+        "codex_cli", "codex", protocol="cli_subprocess",
+        model_id="gpt-5.6-luna", command="codex", cwd=str(tmp_path),
+    )
+    captured: dict[str, object] = {}
+
+    class Process:
+        returncode = 0
+        stderr = None
+
+        class Stdout:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise StopAsyncIteration
+
+        stdout = Stdout()
+
+        async def wait(self):
+            return 0
+
+    async def spawn(*args, **kwargs):
+        captured["args"] = args
+        captured["env"] = kwargs["env"]
+        return Process()
+
+    adapter = CliSubprocessAdapter(conn)
+    adapter.isolated_cwd = str(stage)
+    with patch("asyncio.create_subprocess_exec", new=spawn):
+        asyncio.run(adapter.complete([{"role": "user", "content": "test"}]))
+
+    isolated_home = stage / ".codex"
+    assert captured["env"]["CODEX_HOME"] == str(isolated_home)
+    assert (isolated_home / "auth.json").read_text(encoding="utf-8") == '{"access_token":"test"}'
 
 
 def test_cli_bridge_drains_stderr_before_wait(tmp_path):
@@ -457,4 +549,3 @@ def test_skills_pick_cancels(tmp_path):
     with patch("builtins.input", return_value="0"):
         res = _handle_slash_interactive(ctx, "ses_test", "/skills pick")
     assert res is None
-

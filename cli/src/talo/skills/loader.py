@@ -416,8 +416,16 @@ class SkillLoader:
         self.user_skills_dir = user_skills_dir
         self.project_skills_dir = project_skills_dir
         self.lang = lang or detect_system_language()
+        self._list_cache: list[dict[str, Any]] | None = None
+        self._list_cache_key: tuple[Any, ...] | None = None
 
     def list_skills(self) -> list[dict[str, Any]]:
+        cache_key = tuple(
+            (str(base), base.stat().st_mtime_ns if base and base.exists() else None)
+            for base in (self.user_skills_dir, self.project_skills_dir)
+        )
+        if self._list_cache is not None and cache_key == self._list_cache_key:
+            return [dict(skill) for skill in self._list_cache]
         skills: dict[str, Skill] = {}
         # 기본 → 사용자 → 프로젝트 우선순위 (뒤가 덮어씀)
         for name, meta in BUILTIN_SKILLS.items():
@@ -438,7 +446,10 @@ class SkillLoader:
                 continue
             for skill in _load_from_dir(base, origin, lang=self.lang):
                 skills[skill.name] = skill
-        return [s.to_dict() for s in skills.values()]
+        result = [s.to_dict() for s in skills.values()]
+        self._list_cache_key = cache_key
+        self._list_cache = result
+        return [dict(skill) for skill in result]
 
     def load_skill(self, name: str) -> dict[str, Any] | None:
         for s in self.list_skills():
@@ -539,4 +550,3 @@ def _load_from_dir(base: Path, origin: str, lang: str = "ko") -> list[Skill]:
             lang=lang,
         ))
     return out
-

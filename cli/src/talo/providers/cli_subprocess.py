@@ -12,6 +12,7 @@ ConnectionConfig 필드 활용:
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import shutil
 from pathlib import Path
@@ -72,6 +73,14 @@ class CliSubprocessAdapter(ModelAdapter):
             cmd.append("--json")
         if model_id:
             cmd += ["--model" if self.command == "agy" else "-m", model_id]
+        variant = getattr(self.connection, "model_variant", "") or ""
+        if variant and self.command == "agy":
+            cmd += ["--effort", variant if variant in {"low", "medium", "high"} else "high"]
+        elif variant and self.command == "opencode":
+            cmd += ["--variant", variant]
+        elif variant and self.command == "codex":
+            effort = "xhigh" if variant == "max" else variant
+            cmd += ["-c", f'model_reasoning_effort="{effort}"']
         cwd = getattr(self, "isolated_cwd", None) or self.cwd or None
         if cwd and self.command != "agy":
             cmd += ["--dir" if self.command == "opencode" else "-C", cwd]
@@ -80,12 +89,15 @@ class CliSubprocessAdapter(ModelAdapter):
         else:
             cmd.append(prompt)
 
+        env = self._subprocess_env()
+
         proc = await asyncio.create_subprocess_exec(
             *getattr(self, "command_prefix", []), *cmd,
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
+            env=env,
         )
         self._proc = proc
 
@@ -157,6 +169,20 @@ class CliSubprocessAdapter(ModelAdapter):
     def cancel(self) -> None:
         if self._proc is not None and self._proc.returncode is None:
             self._proc.terminate()
+
+    def _subprocess_env(self) -> dict[str, str] | None:
+        """격리된 Codex가 쓸 수 있는 임시 CODEX_HOME을 준비한다."""
+        if self.command != "codex" or not getattr(self, "isolated_cwd", None):
+            return None
+        staged_home = Path(self.isolated_cwd) / ".codex"
+        staged_home.mkdir(parents=True, exist_ok=True)
+        source_home = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).expanduser()
+        source_auth = source_home / "auth.json"
+        if source_auth.is_file():
+            shutil.copy2(source_auth, staged_home / "auth.json")
+        env = os.environ.copy()
+        env["CODEX_HOME"] = str(staged_home)
+        return env
 
     async def aclose(self) -> None:
         if self._proc is not None:

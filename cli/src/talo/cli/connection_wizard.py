@@ -17,6 +17,7 @@ import getpass
 import os
 import shutil
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,53 @@ from talo.cli import render
 from talo.config import Config, ConnectionConfig
 from talo.providers.resolver import CredentialStore
 from talo.schemas import ExitCode
+
+
+MODEL_VARIANT_LABELS = {
+    "minimal": "최소 (Minimal)",
+    "low": "낮음 (Low)",
+    "medium": "중간 (Medium)",
+    "high": "높음 (High)",
+    "max": "최대 (Max)",
+    "xhigh": "최대 (Max)",
+}
+
+
+def _model_variants(connection: ConnectionConfig) -> list[tuple[str, str, str]]:
+    """CLI가 지원하는 모델별 추론 세기만 표시한다."""
+    command = connection.command or connection.provider_id
+    if command == "opencode":
+        values = ["low", "medium", "high", "max"]
+    elif command == "agy":
+        values = ["low", "medium", "high"]
+    elif command == "codex":
+        values = ["low", "medium", "high", "xhigh"]
+    else:
+        return []
+    return [(value, MODEL_VARIANT_LABELS[value], "현재 모델의 추론 세기") for value in values]
+
+
+def _choose_model_variant(connection: ConnectionConfig) -> ConnectionConfig:
+    rows = _model_variants(connection)
+    if not rows:
+        return connection
+    default = connection.model_variant if connection.model_variant in {row[0] for row in rows} else rows[0][0]
+    try:
+        raw = _choose_menu(
+            f"{connection.model_id.rsplit('/', 1)[-1]} 하위 모델",
+            rows + [("0", "기본값", "공급자 기본 추론 세기를 사용합니다")],
+            f"\n하위 모델 (1~{len(rows)}, 0=기본값): ",
+            default=default,
+        )
+    except (KeyboardInterrupt, EOFError, StopIteration):
+        return connection
+    if raw in ("0", "cancel", "취소", ""):
+        return replace(connection, model_variant="")
+    if raw.isdigit():
+        index = int(raw) - 1
+        if 0 <= index < len(rows):
+            raw = rows[index][0]
+    return replace(connection, model_variant=raw if raw in {row[0] for row in rows} else "")
 
 
 def _choose_menu(title: str, rows: list[tuple[str, str, str]], prompt: str,
@@ -838,7 +886,9 @@ def run_model_picker(config: Config) -> str | None:
         free_models = set(preset.get("free_models", []))
         for model in models:
             leaf = model.rsplit("/", 1)[-1].lower()
-            if conn.provider_id in {"agy", "gemini"} or "gemini" in leaf:
+            if conn.provider_id == "opencode":
+                category = "opencode"
+            elif conn.provider_id in {"agy", "gemini"} or "gemini" in leaf:
                 category = "google"
             elif leaf.startswith("gpt-") or conn.provider_id in {"openai", "codex", "codex_cli"}:
                 category = "openai"
@@ -924,6 +974,7 @@ def run_model_picker(config: Config) -> str | None:
                     f"{'● ' if active == f'{conn.connection_id}:{model}' else ''}{model_label}",
                     " · ".join(filter(None, [
                         "현재 선택" if active == f"{conn.connection_id}:{model}" else "",
+                        f"하위 {MODEL_VARIANT_LABELS.get(conn.model_variant, conn.model_variant)}" if conn.model_variant else "",
                         "Free" if is_free else "",
                         provider_label,
                     ])),
@@ -944,12 +995,13 @@ def run_model_picker(config: Config) -> str | None:
             if not (0 <= model_idx < len(entries)):
                 continue
             selected_conn, chosen_model, _model_label, _provider_label, _is_free = entries[model_idx]
-            if selected_conn.connection_id not in config.connections:
-                config.set_connection(selected_conn)
             break
         else:
             return None
 
+    selected_conn = replace(selected_conn, model_id=chosen_model)
+    selected_conn = _choose_model_variant(selected_conn)
+    config.set_connection(selected_conn)
     target = f"{selected_conn.connection_id}:{chosen_model}"
     config.set_default_model(target)
     render.console.print(f"\n[green]✓ 기본 모델이 '{target}'(으)로 변경되었습니다.[/green]")

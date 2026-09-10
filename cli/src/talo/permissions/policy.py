@@ -118,6 +118,14 @@ class PermissionPolicy:
                 return Decision(True, "프로젝트 편집 프로필", scope=scope)
             return Decision(False, "명령 실행은 승인이 필요함", requires_approval=True, scope=scope)
 
+        # 위험성이 분명한 명령만 묻고, 일반적인 프로젝트 검사 명령은 연속 실행한다.
+        if self.profile == PermissionProfile.APPROVE_FOR_ME:
+            if effect in (ToolEffect.READ, ToolEffect.WRITE):
+                return Decision(True, "프로젝트 변경 자동 승인", scope=scope)
+            if tool_name == "command_run" and _is_safe_project_command(scope):
+                return Decision(True, "안전한 프로젝트 명령 자동 승인", scope=scope)
+            return Decision(False, "위험할 수 있는 명령은 승인이 필요함", requires_approval=True, scope=scope)
+
         # 위임 실행: 사용자가 지정한 경로·명령 범위에서 연속 실행
         if self.profile == PermissionProfile.DELEGATED:
             return Decision(True, "위임 실행 프로필", scope=scope)
@@ -132,3 +140,18 @@ def mode_and_profile(mode: str | None, permission: str | None) -> tuple[WorkMode
     m = WorkMode(mode) if mode in {m.value for m in WorkMode} else WorkMode.DEV
     p = PermissionProfile(permission) if permission in {p.value for p in PermissionProfile} else PermissionProfile.PROJECT_EDIT
     return m, p
+
+
+def _is_safe_project_command(scope: dict[str, Any]) -> bool:
+    """네트워크·설치·임의 셸을 피하는 검증/조회 명령만 자동 승인한다."""
+    argv = scope.get("argv") or []
+    if not argv:
+        return False
+    executable = str(argv[0]).rsplit("/", 1)[-1]
+    if executable in {"pytest", "ruff", "mypy", "tsc", "rg", "grep", "ls", "cat", "sed", "head", "tail", "find"}:
+        return True
+    if executable == "git":
+        return len(argv) > 1 and argv[1] in {"status", "diff", "log", "show", "grep", "branch", "check-ignore"}
+    if executable in {"npm", "pnpm", "yarn"}:
+        return len(argv) > 1 and argv[1] in {"test", "lint", "typecheck", "build"}
+    return False

@@ -33,6 +33,7 @@ class ConnectionConfig:
     base_url: str = "https://openrouter.ai/api/v1"
     credential_ref: str = "env:TALO_API_KEY"
     model_id: str = ""
+    model_variant: str = ""
     command: str = ""
     cwd: str = ""
     capabilities: dict[str, str] = field(default_factory=dict)
@@ -46,6 +47,7 @@ class ConnectionConfig:
             "base_url": self.base_url,
             "credential_ref": self.credential_ref,
             "model_id": self.model_id,
+            "model_variant": self.model_variant,
             "command": self.command,
             "cwd": self.cwd,
             "capabilities": self.capabilities,

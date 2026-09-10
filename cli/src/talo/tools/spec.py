@@ -61,10 +61,12 @@ class ToolContext:
         root = self.repo_root.resolve()
         return resolved == root or root in resolved.parents
 
-    def resolve_path(self, rel: str) -> Path:
-        p = Path(rel)
+    def resolve_path(self, rel: str, *, allow_external: bool = False) -> Path:
+        p = Path(rel).expanduser()
         candidate = p.resolve() if p.is_absolute() else (self.repo_root / p).resolve()
         if not self.is_path_allowed(candidate):
+            if allow_external and candidate.exists():
+                return candidate
             raise PermissionError(f"프로젝트 범위를 벗어난 경로: {rel}")
         return candidate
 
