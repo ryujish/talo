@@ -43,7 +43,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--max-iterations", type=int, default=None)
 
     p_resume = sub.add_parser("resume", help="세션 선택·재개")
-    p_resume.add_argument("session_id", nargs="?", help="재개할 세션 ID")
+    p_resume.add_argument("session_id", nargs="?", help="재개할 세션 ID 또는 번호")
+    p_resume.add_argument("request", nargs="?", default=None, help="재개 후 바로 실행할 작업 설명 (생략 시 대화형 모드)")
+    p_resume.add_argument("--next", dest="resume_next", action="store_true", help="마지막 handoff의 첫 번째 다음 행동을 바로 실행")
 
     p_connect = sub.add_parser("connect", help="AI 연결 관리")
     p_connect.add_argument("action", nargs="?", choices=["add", "remove", "use", "validate", "list"], default=None)
@@ -406,7 +408,7 @@ def _brief(payload: dict[str, Any]) -> str:
 # --------------------------------------------------------------------------
 
 async def _cmd_resume(args: argparse.Namespace) -> int:
-    from talo.application.service import create_app_context, list_sessions
+    from talo.application.service import create_app_context, list_sessions, run_request
     from talo.cli import render
 
     ctx = create_app_context()
@@ -417,18 +419,86 @@ async def _cmd_resume(args: argparse.Namespace) -> int:
             return int(ExitCode.INPUT_ERROR)
         if args.session_id:
             chosen = next((s for s in sessions if s["id"].startswith(args.session_id)), None)
+            if chosen is None and args.session_id.isdigit():
+                idx = int(args.session_id)
+                if 1 <= idx <= len(sessions):
+                    chosen = sessions[idx - 1]
             if chosen is None:
                 render.console.print(f"[red]세션을 찾지 못함: {args.session_id}[/red]")
                 return int(ExitCode.INPUT_ERROR)
         else:
-            render.sessions_table(sessions)
-            render.console.print("`talo resume <세션ID>`로 재개하거나 `talo`로 새 세션을 시작하세요.")
-            return int(ExitCode.COMPLETED)
+            if sys.stdin.isatty():
+                from talo.cli.connection_wizard import _choose_menu
+
+                rows = [
+                    (str(i), s["title"] or "(제목 없음)", f"{s['id'][:16]} · {s['status']}")
+                    for i, s in enumerate(sessions, 1)
+                ] + [("0", "이전 단계", "Esc로 돌아갑니다")]
+                choice = await asyncio.to_thread(
+                    _choose_menu,
+                    "재개할 세션",
+                    rows,
+                    "\n↑↓ 이동 · Enter 선택 · Esc 이전: ",
+                    cancel_key="0",
+                )
+                if choice in ("0", "cancel", "취소", "back"):
+                    return int(ExitCode.COMPLETED)
+                chosen = next((s for s in sessions if s["id"].startswith(choice)), None)
+                if chosen is None and choice.isdigit():
+                    idx = int(choice)
+                    if 1 <= idx <= len(sessions):
+                        chosen = sessions[idx - 1]
+                if chosen is None:
+                    render.console.print(f"[red]세션을 찾지 못함: {choice}[/red]")
+                    return int(ExitCode.INPUT_ERROR)
+            else:
+                render.sessions_table(sessions)
+                render.console.print("`talo resume <세션ID>`로 재개하거나 `talo`로 새 세션을 시작하세요.")
+                return int(ExitCode.COMPLETED)
         session_id = chosen["id"]
         render.console.print(f"[green]세션 재개: {session_id} — {chosen['title'] or '(제목 없음)'}[/green]")
-        _show_incomplete(ctx, session_id)
         from talo.cli.changes import show_resume
         show_resume(ctx, session_id)
+
+        # 요청이 지정되었거나 --next 옵션이 지정된 경우 실제 이어서 실행
+        req = getattr(args, "request", None)
+        if getattr(args, "resume_next", False) and not req:
+            ho = ctx.repository.latest_handoff(session_id)
+            if ho:
+                import json as _json
+                try:
+                    doc = _json.loads(ho["document_json"] or "{}")
+                except (TypeError, ValueError):
+                    doc = {}
+                actions = doc.get("next_actions") or []
+                if actions:
+                    if isinstance(actions[0], str):
+                        req = actions[0]
+                    elif isinstance(actions[0], dict):
+                        req = actions[0].get("title") or actions[0].get("action") or str(actions[0])
+
+        if req:
+            mode = ctx.config.default_mode
+            permission = ctx.config.default_permission
+            runs = ctx.repository.list_runs(session_id)
+            if runs:
+                last_run = runs[-1]
+                mode = last_run["mode"] or mode
+            outcome = await run_request(
+                ctx,
+                req,
+                session_id=session_id,
+                mode=mode,
+                permission=permission,
+                on_human=render.print_event,
+            )
+            from talo.cli.interactive import _print_outcome
+            _print_outcome(outcome)
+            return int(outcome.exit_code)
+
+        if not sys.stdin.isatty():
+            return int(ExitCode.COMPLETED)
+
         from talo.cli.interactive import run_interactive
         return await run_interactive(ctx, session_id=session_id)
     finally:

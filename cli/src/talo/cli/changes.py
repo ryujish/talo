@@ -82,16 +82,86 @@ def show_changes(ctx, action="list", cid=None, *, patch_hash=None, json_out=Fals
 
 def show_resume(ctx, session_id):
     from talo.cli.render import console
-    from talo.continuity import state_hash, tasks
+    from talo.continuity import state_hash, tasks, text_content
+    from talo.sanitize import redact_text
+
+    def clean(value, max_len=180):
+        return redact_text(str(value), max_len) if value is not None else ""
+
     row = ctx.repository.latest_handoff(session_id)
     if row:
-        doc = json.loads(row["document_json"])
-        console.print("마지막 목표: " + str(doc.get("goal", "확인되지 않음")), markup=False)
-        if doc.get("workspace_hash") != state_hash(ctx.workspace.snapshot()):
+        try:
+            doc = json.loads(row["document_json"] or "{}")
+        except (TypeError, ValueError):
+            doc = {}
+        goal = doc.get("goal") or "확인되지 않음"
+        console.print("마지막 목표: " + clean(goal), markup=False)
+
+        completed = doc.get("completed_tasks") or []
+        if completed:
+            console.print("완료:")
+            for t in completed:
+                if isinstance(t, dict):
+                    ev = f" [근거: {clean(t.get('evidence'))}]" if t.get("evidence") else ""
+                    console.print(f"  - [x] {clean(t.get('title'))} ({clean(t.get('id'))}){ev}", markup=False)
+                else:
+                    console.print(f"  - [x] {clean(t)}", markup=False)
+        else:
+            console.print("완료: 없음", markup=False)
+
+        open_tasks = doc.get("open_tasks")
+        if open_tasks is None:
+            open_tasks = [t for t in tasks(ctx.repository, ctx.workspace_id) if t.get("status") != "done"]
+        if open_tasks:
+            console.print("남은 일:")
+            for t in open_tasks:
+                if isinstance(t, dict):
+                    status = clean(t.get("status") or "open", 40)
+                    console.print(f"  - [{status}] {clean(t.get('title'))} ({clean(t.get('id'))})", markup=False)
+                else:
+                    console.print(f"  - [open] {clean(t)}", markup=False)
+        else:
+            console.print("남은 일: 없음", markup=False)
+
+        verifications = doc.get("verification") or []
+        if verifications:
+            console.print("검증:")
+            for v in verifications:
+                if isinstance(v, dict):
+                    desc = v.get("operation_id") or v.get("command") or v.get("id") or "검증"
+                    res = v.get("result") or v.get("status") or ("성공" if v.get("exit_code") == 0 else "실패")
+                else:
+                    desc, res = v, ""
+                console.print(f"  - {clean(desc)}{': ' + clean(res) if res else ''}", markup=False)
+        else:
+            console.print("검증: 없음", markup=False)
+
+        actions = doc.get("next_actions") or []
+        if actions:
+            console.print("다음 행동:")
+            for a in actions:
+                console.print(f"  - {clean(a)}", markup=False)
+        else:
+            console.print("다음 행동: 없음", markup=False)
+
+        if (doc.get("workspace_hash") and hasattr(ctx, "workspace") and ctx.workspace is not None
+                and doc["workspace_hash"] != state_hash(ctx.workspace.snapshot())):
             console.print("작업 파일 상태가 달라졌습니다. 이전 검증은 최신 상태의 성공 근거가 아닙니다.", style="yellow")
-    for task in tasks(ctx.repository, ctx.workspace_id):
-        if task["status"] != "done":
-            console.print(f"남은 일 [{task['status']}]: {task['title'][:180]} ({task['id']})", markup=False)
+    else:
+        console.print("이전 handoff 기록이 없습니다.", markup=False)
+        remaining = [t for t in tasks(ctx.repository, ctx.workspace_id) if t.get("status") != "done"]
+        if remaining:
+            console.print("남은 일:")
+            for t in remaining:
+                console.print(f"  - [{clean(t.get('status') or 'open', 40)}] {clean(t.get('title'))} ({clean(t.get('id'))})", markup=False)
+
     pending = for_context(ctx).list("proposed")
     for change in pending:
         console.print("검토 대기: talo changes review " + change["id"], markup=False)
+
+    last = ctx.repository.conn.execute(
+        "SELECT m.content_json FROM messages m JOIN runs r ON r.id=m.run_id "
+        "WHERE r.session_id=? AND m.role='assistant' ORDER BY m.created_at DESC,m.rowid DESC LIMIT 1",
+        (session_id,),
+    ).fetchone()
+    console.print("마지막 문구: " + clean(text_content(last["content_json"]) if last else "없음", 400), markup=False)

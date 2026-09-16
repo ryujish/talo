@@ -26,6 +26,7 @@ COMMANDS_HELP = {
     "/new": ("새 세션", "현재 기록을 보존하고 새 세션을 시작합니다"),
     "/memory": ("기억 관리", "프로젝트 기억을 조회·추가·확정·삭제합니다"),
     "/sessions": ("세션 목록", "저장된 작업 세션을 확인합니다"),
+    "/resume": ("세션 재개", "저장된 세션을 선택해 이어갑니다"),
     "/permissions": ("권한 설정", "현재 작업 방식과 권한을 확인합니다"),
     "/skills": ("스킬 관리", "스킬 목록·실행(/skills run)·상세 정보 확인"),
     "/mcp": ("MCP 연결", "등록된 MCP 도구 연결 상태를 확인합니다"),
@@ -448,6 +449,71 @@ def _handle_slash_interactive(
     if cmd == "/sessions":
         render.sessions_table(list_sessions(ctx))
         return None
+    if cmd == "/resume":
+        sessions = list_sessions(ctx)
+        if not sessions:
+            render.console.print("[yellow]저장된 세션이 없습니다.[/yellow]")
+            return None
+        parts = arg.strip().split(maxsplit=1)
+        choice = parts[0] if parts else ""
+        sub_req = parts[1].strip() if len(parts) > 1 else None
+        resume_next = False
+        if choice == "--next":
+            choice = ""
+            resume_next = True
+        elif sub_req == "--next":
+            sub_req = None
+            resume_next = True
+
+        if not choice:
+            if sys.stdin.isatty():
+                from talo.cli.connection_wizard import _choose_menu
+
+                rows = [
+                    (str(i), s["title"] or "(제목 없음)", f"{s['id'][:16]} · {s['status']}")
+                    for i, s in enumerate(sessions, 1)
+                ] + [("0", "이전 단계", "Esc로 돌아갑니다")]
+                choice = _choose_menu(
+                    "재개할 세션",
+                    rows,
+                    "\n↑↓ 이동 · Enter 선택 · Esc 이전: ",
+                    cancel_key="0",
+                )
+            else:
+                render.sessions_table(sessions)
+                return None
+        if choice in ("0", "cancel", "취소", "back", ""):
+            return None
+        chosen = next((s for s in sessions if s["id"].startswith(choice)), None)
+        if chosen is None and choice.isdigit():
+            index = int(choice)
+            if 1 <= index <= len(sessions):
+                chosen = sessions[index - 1]
+        if chosen is None:
+            render.console.print(f"[red]세션을 찾지 못함: {choice}[/red]")
+            return None
+        next_session = chosen["id"]
+        render.console.print(f"[green]세션 재개: {next_session} — {chosen['title'] or '(제목 없음)'}[/green]")
+        from talo.cli.changes import show_resume
+        show_resume(ctx, next_session)
+        res: dict[str, Any] = {"session_id": next_session}
+        if resume_next and not sub_req:
+            ho = ctx.repository.latest_handoff(next_session)
+            if ho:
+                import json as _json
+                try:
+                    doc = _json.loads(ho["document_json"] or "{}")
+                except (TypeError, ValueError):
+                    doc = {}
+                actions = doc.get("next_actions") or []
+                if actions:
+                    if isinstance(actions[0], str):
+                        sub_req = actions[0]
+                    elif isinstance(actions[0], dict):
+                        sub_req = actions[0].get("title") or actions[0].get("action") or str(actions[0])
+        if sub_req:
+            res["run_request"] = sub_req
+        return res
     if cmd == "/skills":
         clean_arg = arg.strip()
         is_ko = getattr(ctx.skill_loader, "lang", "ko") == "ko"

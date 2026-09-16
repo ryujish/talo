@@ -250,3 +250,194 @@ def test_resume_list_sessions(env, monkeypatch, capsys):
 
     assert cli_main(["resume"]) == 0
     assert "테스트 세션" in capsys.readouterr().out
+
+
+def test_resume_by_id_shows_five_sections(env, monkeypatch, capsys):
+    from talo.application.service import start_session
+    from talo.cli.changes import show_resume
+
+    ctx = _ctx(monkeypatch, env)
+    try:
+        sid = start_session(ctx, "세션 1")
+        handoff_doc = {
+            "schema": "talo.handoff/0.2",
+            "goal": "웹 성능 최적화",
+            "completed_tasks": [
+                {"id": "task_1", "title": "벤치마크 작성", "status": "done", "evidence": "테스트 통과"}
+            ],
+            "open_tasks": [
+                {"id": "task_2", "title": "캐시 개선", "status": "in_progress"}
+            ],
+            "verification": [
+                {"command": "pytest", "status": "succeeded", "exit_code": 0}
+            ],
+            "next_actions": [
+                "캐시 검토 (task_2)"
+            ],
+            "workspace_hash": "dummy",
+        }
+        ctx.repository.save_handoff(sid, "run_1", 1, handoff_doc)
+        run_id = ctx.repository.create_run(sid, "request_1", "dev", "completed")
+        ctx.repository.append_message(
+            run_id, "assistant", json.dumps([{"type": "text", "text": "최종 답변입니다."}])
+        )
+        show_resume(ctx, sid)
+        out = capsys.readouterr().out
+        assert "목표" in out and "웹 성능 최적화" in out
+        assert "완료" in out and "벤치마크 작성" in out
+        assert "남은 일" in out and "캐시 개선" in out
+        assert "검증" in out and "pytest" in out
+        assert "다음 행동" in out and "캐시 검토" in out
+        assert "마지막 문구" in out and "최종 답변입니다." in out
+    finally:
+        ctx.close()
+
+
+def test_resume_by_numeric_index(env, monkeypatch, capsys):
+    from talo.application.service import start_session
+    from talo.cli.main import main as cli_main
+
+    ctx = _ctx(monkeypatch, env)
+    try:
+        sid = start_session(ctx, "첫번째 세션")
+    finally:
+        ctx.close()
+
+    assert cli_main(["resume", "1"]) == 0
+    out = capsys.readouterr().out
+    assert "세션 재개" in out
+    assert sid in out
+
+
+def test_resume_with_request(env, monkeypatch, capsys):
+    from talo.application.service import start_session
+    from talo.cli.main import main as cli_main
+
+    ctx = _ctx(monkeypatch, env)
+    try:
+        sid = start_session(ctx, "실행 세션")
+    finally:
+        ctx.close()
+
+    assert cli_main(["resume", sid, "안녕"]) == 0
+    out = capsys.readouterr().out
+    assert "세션 재개" in out
+    assert sid in out
+
+    ctx2 = _ctx(monkeypatch, env)
+    try:
+        runs = ctx2.repository.list_runs(sid)
+        assert len(runs) >= 1
+    finally:
+        ctx2.close()
+
+
+def test_resume_interactive_select(env, monkeypatch, capsys):
+    from talo.application.service import start_session
+    from talo.cli.main import main as cli_main
+
+    ctx = _ctx(monkeypatch, env)
+    try:
+        sid = start_session(ctx, "선택 세션")
+    finally:
+        ctx.close()
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("talo.cli.connection_wizard._choose_menu", lambda *args, **kwargs: "1")
+    assert cli_main(["resume"]) == 0
+    out = capsys.readouterr().out
+    assert "세션 재개" in out
+    assert sid in out
+
+
+def test_resume_escape_returns_to_previous_step(env, monkeypatch, capsys):
+    from talo.application.service import start_session
+    from talo.cli.main import main as cli_main
+
+    ctx = _ctx(monkeypatch, env)
+    try:
+        start_session(ctx, "취소 세션")
+    finally:
+        ctx.close()
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("talo.cli.connection_wizard._choose_menu", lambda *args, **kwargs: "0")
+    assert cli_main(["resume"]) == 0
+    assert "세션 재개" not in capsys.readouterr().out
+
+
+def test_resume_slash_switches_session(env, monkeypatch, capsys):
+    from talo.application.service import start_session
+    from talo.cli.interactive import _handle_slash_interactive
+
+    ctx = _ctx(monkeypatch, env)
+    try:
+        sid = start_session(ctx, "슬래시 세션")
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr("talo.cli.connection_wizard._choose_menu", lambda *args, **kwargs: "1")
+        result = _handle_slash_interactive(ctx, sid, "/resume")
+        assert result == {"session_id": sid}
+        assert sid in capsys.readouterr().out
+    finally:
+        ctx.close()
+
+
+def test_resume_with_next_action(env, monkeypatch, capsys):
+    from talo.application.service import start_session
+    from talo.cli.main import main as cli_main
+
+    ctx = _ctx(monkeypatch, env)
+    try:
+        sid = start_session(ctx, "넥스트 세션")
+        handoff_doc = {
+            "schema": "talo.handoff/0.2",
+            "goal": "목표",
+            "open_tasks": [],
+            "completed_tasks": [],
+            "verification": [],
+            "next_actions": ["자동 다음 작업"],
+            "workspace_hash": "dummy",
+        }
+        ctx.repository.save_handoff(sid, "run_1", 1, handoff_doc)
+    finally:
+        ctx.close()
+
+    assert cli_main(["resume", sid, "--next"]) == 0
+    out = capsys.readouterr().out
+    assert "세션 재개" in out
+
+    ctx2 = _ctx(monkeypatch, env)
+    try:
+        runs = ctx2.repository.list_runs(sid)
+        assert len(runs) >= 1
+    finally:
+        ctx2.close()
+
+
+def test_resume_slash_with_request_and_next(env, monkeypatch, capsys):
+    from talo.application.service import start_session
+    from talo.cli.interactive import _handle_slash_interactive
+
+    ctx = _ctx(monkeypatch, env)
+    try:
+        sid = start_session(ctx, "슬래시 후속요청 세션")
+        handoff_doc = {
+            "schema": "talo.handoff/0.2",
+            "goal": "목표",
+            "open_tasks": [],
+            "completed_tasks": [],
+            "verification": [],
+            "next_actions": [{"title": "슬래시 자동 다음 작업"}],
+            "workspace_hash": "dummy",
+        }
+        ctx.repository.save_handoff(sid, "run_1", 1, handoff_doc)
+
+        # 1. 인자와 함께 즉시 실행 요청
+        res1 = _handle_slash_interactive(ctx, sid, f"/resume {sid} 추가작업실행")
+        assert res1 == {"session_id": sid, "run_request": "추가작업실행"}
+
+        # 2. --next 플래그로 handoff의 다음 작업 가져오기
+        res2 = _handle_slash_interactive(ctx, sid, f"/resume {sid} --next")
+        assert res2 == {"session_id": sid, "run_request": "슬래시 자동 다음 작업"}
+    finally:
+        ctx.close()
